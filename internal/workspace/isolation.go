@@ -325,4 +325,3 @@ func pathExists(p string) bool {
 	_, err := os.Lstat(p)
 	return err == nil
 }
-

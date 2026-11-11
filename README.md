@@ -1,75 +1,160 @@
-# Sen-VN v1.2.0
+<div align="center">
 
-**Deterministic AI Coding, SEN-STD-SDLC-001 (`SSDS v1.0.0`) Lifecycle & Creative Workspace Referee (`sen`)** — zero paid API keys, zero CGO, zero Docker required, packaged as a Zero-Build GitHub repository and native **Antigravity Plugin**.
+# 🪷 Sen-VN
 
----
+**Hệ Điều Hành Kỹ Nghệ Phần Mềm Cho AI • Cưỡng Chế Quy Chuẩn SEN-STD-SDLC-001 (`SSDS v1.0.0`) • Trọng Tài Kiểm Chứng Xác Định**
 
-## Why Sen-VN v1.2.0 + SSDS v1.0.0?
-
-AI agents frequently jump straight from a prompt into writing production code without requirements or architecture, fabricate `"PASS"` results for unexecuted tests, mutate approved architecture baselines silently, contaminate sibling repositories in multi-project workspaces, or spin in endless broken retry loops.
-
-**Sen-VN v1.2.0** compiles the entire **SEN SOFTWARE DEVELOPMENT STANDARD (`SEN-STD-SDLC-001 v1.0.0`, 7 Parts / 28 Sections)** into an unforgeable local state machine backed by an **8-table SQLite WAL ledger (`.sen/state.db`)** and **9 CLI commands**:
-
-1. **Zero-Prompt Automatic SSDS Activation (§3.1–§3.4):** `PreInvocation` detects software creation/modification requests (bilingual Vietnamese & English across 15 software domains), audits existing Brownfield repos (§2.3), selects `WF_MICRO | WF_STANDARD | WF_CRITICAL`, pins `applied_ssds_version = "1.0.0"`, and emits the `[SSDS v1.0.0 — Đã kích hoạt tự động]` Workflow Declaration banner — while pure Q&A queries and non-code media/docs folders stay untouched.
-2. **10-Phase State Machine (`P0..P9`) & Pre-Execution Write Firewall (§5–§14, §22):** `PreToolUse` and `sen begin` physically block premature production code edits during `P0` (Charter), `P1` (Requirements), `P2` (Architecture/ADRs), and `P3` (Planning), separate `REVIEW_REQUIRED` from `APPROVED` (`Silence != Approval`, §21), and reject hollow `TBD/TODO` deliverables.
-3. **27 Engineering Roles, Honest Review, 6-Link Traceability & CIA Lock (§4.3, §16–§20, §27):** Enforces `author_role != reviewer_role`, downgrades unverified `INDEPENDENT_AI_REVIEW` to `SELF_REVIEW` with explicit disclosure, locks approved `P1/P2` baselines until a 10-dimension `CIA-*` Change Impact Analysis is recorded, cross-checks `Requirement -> Component -> Task -> File -> Evidence -> Release` in `docs/traceability-matrix.md`, blocks fake QA `PASS` claims, and rejects expired `EXC-*` exceptions.
-4. **Multi-Project Isolation & Independent SSDS Versioning:** Target-path nearest-project resolution (`ResolveNearestProjectRoot` + `--project <dir>` + `CheckNoSubprojectCrossing`) guarantees zero cross-project contamination when opening an umbrella workspace. Each project pins its own SHA-256-signed `ssds_version` (`sen sdlc version --changelog | --check | --upgrade | --rollback`), so releasing `SSDS v1.1` / `v2.0` never silently alters active `v1.0.0` projects.
-5. **Bounded Repair (`<= 3` Rounds), Safe `--express` Brakes & Raw Media Guard:** Preserves `SMALL`/`MEDIUM`/`LARGE` sizing, `--express` autonomous execution (with `WF_CRITICAL`, deletion, and critical-path `force_ask` brakes), `[QUARANTINE 3/3]` loop protection, `ffprobe` media stream verification, and 1-command Companion/Pack management.
+[![Release](https://img.shields.io/github/v/release/developerfs0110/Sen-VN?style=flat-square)](https://github.com/developerfs0110/Sen-VN/releases)
+[![Go Report](https://img.shields.io/badge/go-1.26+-00ADD8?style=flat-square&logo=go)](https://golang.org)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+[![Standard](https://img.shields.io/badge/Ti%C3%AAu%20chu%E1%BA%A9n-SEN--STD--SDLC--001%20v1.0.0-success?style=flat-square)](internal/ssds/SSDS_CHANGELOG.md)
 
 ---
 
-## Zero-Build Installation (No Go Toolchain Required!)
+### 📑 ĐIỀU HƯỚNG / NAVIGATION TABS
 
-### Option 1 — Native Antigravity Plugin (Zero-Build)
+| 🇻🇳 [**README (Tiếng Việt)**](README.md) | 🚀 [**Cài Đặt (Setup)**](docs/installation/README.md) | 🇬🇧 [**English Documentation**](README.en.md) | 📋 [**Release Notes**](docs/releases/v1.2.0.md) |
+|:---:|:---:|:---:|:---:|
+
+---
+
+</div>
+
+## 1. Bối cảnh: Tại sao AI Lập trình Thất bại ở Dự án Lớn?
+
+Sự bùng nổ của các trợ lý AI lập trình (Claude Code, Cursor, Windsurf, Codex, Gemini CLI...) đã mang lại tốc độ viết mã vượt bậc. Tuy nhiên, trong thực tế kỹ nghệ phần mềm chuyên nghiệp, tốc độ mà thiếu đi tính kỷ luật sẽ dẫn đến những hậu quả nghiêm trọng:
+
+- **Bệnh quên task & nói trước quên sau:** Càng trao đổi lâu, AI càng dễ mất ngữ cảnh yêu cầu ban đầu, tự bịa ra thông tin (hallucination) và bỏ quên các trường hợp biên quan trọng.
+- **Thói quen "nhảy cóc" vào gõ code bừa (Cowboy Coding):** Vừa nhận đề bài, AI lập tức lao vào viết mã nguồn ngay mà bỏ qua hoàn toàn các bước phân tích yêu cầu, thiết kế kiến trúc, mô hình dữ liệu và kiểm thử chấp nhận.
+- **Bằng chứng giả mạo & Gian lận chỉ số:** AI rất hay tự báo cáo `"PASS"` cho những bài test chưa từng thực sự được chạy, hoặc tự viết các câu assert hiển nhiên đúng (tautological tests) để qua mặt người dùng.
+- **Phá vỡ bán kính an toàn (Zero Blast Radius):** Sửa một tính năng nhỏ nhưng âm thầm làm gãy đổ các module liên quan, hoặc làm ô nhiễm chéo các dự án độc lập nằm chung trong một Workspace mẹ.
+- **Đốt token & Vòng lặp sửa lỗi vô tận:** Khi gặp lỗi biên dịch hay runtime, AI thường rơi vào vòng xoáy đoán mò và sửa đi sửa lại hàng chục lần, tiêu tốn hàng trăm ngàn token vô ích mà không giải quyết được gốc rễ.
+
+---
+
+## 2. Mục đích của Sen: Kỷ Luật Tạo Nên Sự Đột Phá
+
+**Sen** không phải là thêm một công cụ sinh mã thông thường. **Sen là Khung Điều Phối & Trọng Tài Kiểm Chứng Chất Lượng Phần Mềm AI-Native (AI-Native Software Engineering & Quality Governance Referee)**.
+
+Sen đóng vai trò là "người bảo hộ" và "nhạc trưởng" nghiêm khắc, chuyển hóa năng lực của các mô hình AI thành một đội ngũ kỹ sư có tổ chức và có trách nhiệm giải trình. Bằng cách biên dịch toàn bộ **QUY CHUẨN PHÁT TRIỂN PHẦN MỀM SEN (`SEN-STD-SDLC-001 v1.0.0`, 7 Phần / 28 Điều khoản)** thành máy trạng thái vật lý, Sen đảm bảo AI phải tuân thủ nghiêm ngặt các quy tắc kỹ thuật mà không thể đi đường tắt.
+
+Với Sen, AI không còn là một tay thợ code chạy rông, mà là một tổ chức kỹ sư hoàn chỉnh được kiểm soát bởi tường lửa ghi mã vật lý, chuỗi băm chứng cứ mật mã và các cổng phê duyệt độc lập của con người.
+
+---
+
+## 3. Tại sao nên chọn Sen? (Best-of-the-Best Highlights)
+
+- **Tự động nhận diện & Kích hoạt 0 câu nhắc thừa:** Tự động phát hiện yêu cầu phát triển phần mềm song ngữ Việt–Anh, tự quét khảo sát dự án sẵn có (Brownfield Repo Audit §2.3), phân loại quy trình thích ứng (`WF_MICRO | WF_STANDARD | WF_CRITICAL`) và tuyên bố mục tiêu pha mà không cần nhắc lại.
+- **Tường lửa ghi mã tiền thi hành:** Khóa cứng quyền ghi mã nguồn và manifest trong các pha chuẩn bị (`P0..P3`). AI bắt buộc phải hoàn thành và được duyệt tài liệu yêu cầu, kiến trúc trước khi được phép đụng vào code.
+- **27 Vai trò Kỹ sư & Phản biện Trung thực:** Bắt buộc tách biệt vai trò (`author_role != reviewer_role`). Các đánh giá AI không có kiểm chứng độc lập sẽ tự động bị hạ cấp xuống `SELF_REVIEW` kèm cảnh báo minh bạch.
+- **Ma trận truy xuất nguồn gốc 6 liên kết:** Đối soát chặt chẽ chuỗi `Requirement -> Component -> Task -> File -> Evidence -> Release` trong `docs/traceability-matrix.md`.
+- **Chuỗi băm bằng chứng kiểm thử mật mã:** Mọi kết quả thực thi kiểm thử và build thật được lưu trữ bất biến vào sổ cái SQLite WAL 8 bảng có băm SHA-256 (`.sen/state.db`).
+- **Phân tích tác động thay đổi 1 lần dùng (CIA):** Tài liệu kiến trúc sau khi được duyệt sẽ bị khóa băm. Mọi thay đổi cấu trúc sau đó bắt buộc phải lập hồ sơ phân tích tác động 10 chiều (`CIA-*`) trước khi mở khóa.
+- **Cách ly tuyệt đối đa dự án:** Tự động định vị dự án con gần nhất và cơ chế bảo vệ thư mục mẹ giúp ngăn chặn 100% tình trạng nhiễm chéo tài liệu và trạng thái giữa các dự án con.
+- **Quản trị phiên bản tiêu chuẩn độc lập (Phần II):** Mỗi dự án được ghim phiên bản tiêu chuẩn riêng (`applied_ssds_version`) có chữ ký điện tử. Nâng cấp chuẩn toàn cục không bao giờ làm phá vỡ các dự án cũ đang vận hành.
+
+---
+
+## 4. Menu Cài Đặt Nhanh & Điều Hướng
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       DANH MỤC HƯỚNG DẪN CÀI ĐẶT                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  • Hướng dẫn Windows (PowerShell)      ──>  docs/installation/windows.md    │
+│  • Hướng dẫn Linux & macOS (POSIX)     ──>  docs/installation/linux-macos.md│
+│  • Tích hợp Google Antigravity IDE     ──>  docs/installation/antigravity.md│
+│  • Dùng với VSCode, Cursor & Claude    ──>  docs/installation/vscode.md     │
+│  • Sổ tay Xử lý Sự cố (Troubleshooting)──> docs/installation/troubleshoot.md│
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Cài đặt nhanh 1 lệnh duy nhất:
+
+**Windows PowerShell (Không cần quyền Admin / UAC):**
+```powershell
+irm https://raw.githubusercontent.com/developerfs0110/Sen-VN/main/scripts/install-sen.ps1 | iex
+```
+
+**macOS & Linux (POSIX Shell, Không cần root):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/developerfs0110/Sen-VN/main/scripts/install-sen.sh | sh
+```
+
+**Plugin Antigravity Bản địa:**
 ```bash
 git clone https://github.com/developerfs0110/Sen-VN.git .agents/plugins/sen-vn
 ```
 
-### Option 2 — 1-Command CLI + Global Antigravity Hooks (`~/.gemini/config/hooks.json`)
-**Windows PowerShell (No Admin / SmartScreen-Safe):**
-```powershell
-irm https://raw.githubusercontent.com/developerfs0110/Sen-VN/main/scripts/install-sen.ps1 | iex
-# Optional: skip global ~/.gemini/config/hooks.json merge or initialize a workspace with packs:
-powershell -ExecutionPolicy Bypass -File .\scripts\install-sen.ps1 -ConfigureHooks:$false
-powershell -ExecutionPolicy Bypass -File .\scripts\install-sen.ps1 -Workspace . -Packs media-video,workflow-diagram
-```
+Xem đầy đủ các tùy chọn tại [**Setup Hub (docs/installation/README.md)**](docs/installation/README.md).
 
-**macOS / Linux:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/developerfs0110/Sen-VN/main/scripts/install-sen.sh | sh
-./scripts/install-sen.sh --no-hooks --workspace . --packs media-video,workflow-diagram
-```
+---
 
-### Option 3 — Build from Source (Go 1.26+)
-```bash
-go build -trimpath -ldflags="-s -w" -o sen.exe ./cmd/sen
+## 5. Tổng Quan Kiến Trúc Kỹ Thuật
+
+Sen-VN được viết bằng Go thuần túy (không CGO, không phụ thuộc thư viện ngoài, không cần Docker), vận hành trên sổ cái **SQLite WAL 8 bảng** và bề mặt **9 lệnh CLI chuẩn mực**:
+
+```mermaid
+graph TD
+    classDef client fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0f172a;
+    classDef firewall fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#0f172a;
+    classDef engine fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#0f172a;
+    classDef ledger fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#0f172a;
+
+    subgraph Hooks ["Vòng đời Hook Antigravity"]
+        H1["PreInvocation: Nhận diện ý định & Khảo sát Brownfield"]:::client
+        H2["PreToolUse: Tường lửa ghi mã & Bảo vệ quyền con người"]:::firewall
+        H3["Stop: Chặn dừng khi task dở dang & Đồng bộ trạng thái"]:::client
+    end
+
+    subgraph Core ["Động cơ Lõi Sen (9 Lệnh CLI)"]
+        C1["sen init / brief / intake"]:::engine
+        C2["sen begin / verify / undo / done / status"]:::engine
+        C3["sen sdlc (Máy trạng thái 10 Pha & Quản trị SSDS)"]:::engine
+    end
+
+    subgraph Storage ["Sổ cái Bền vững SQLite WAL (8 Bảng)"]
+        S1[("evidence, requirements, rules, snapshots")]:::ledger
+        S2[("ssds_project, ssds_phases, ssds_governance, tasks")]:::ledger
+    end
+
+    H1 --> C1
+    H2 --> C2
+    C2 --> C3
+    C3 --> S1
+    C3 --> S2
 ```
 
 ---
 
-## 9-Command CLI Surface (`sen [--project <dir>] <cmd>`)
+## 6. Giấy Phép & Đóng Góp
 
-| # | Command | Purpose |
-|---|---|---|
-| 1 | `sen init [--install-companions] [--packs <list\|all\|csv>] [--profile <...>] [--express] [--update]` | Initializes `.sen/state.db` (8 WAL tables), signed `.sen/config.json` (preserving pinned `ssds_version` & `project_id`), `AGENTS.md`, `.agents/hooks.json`, and companions/packs. |
-| 2 | `sen brief [--path <file>] [--hook [event]]` | Emits `<250 token` startup brief (including `[SSDS v1.0.0 \| cat=... \| wf=... \| phase=... \| role=...]` & `ssds_notice`) or runs the 4-event Antigravity JSON hook adapter. |
-| 3 | `sen intake` | Captures verbatim user quotes (`R1..Rn`, `R_sec`, `R_law`), toggles `--express`, or manages `<= 20` persistent project rules. |
-| 4 | `sen begin <task_id>` | Opens a phase-checked scoped task (`--reqs ... --files ... [--phase P5] [--components C1,C2]`), enforces SSDS write firewall & subproject boundaries, locks tests/raw media, and snapshots files. |
-| 5 | `sen verify <task_id> -- <bin> [args...]` | Enforces `<= 3` repair attempts, runs direct binaries (`go`, `pytest`, `vitest`, `ffprobe`), updates SSDS §20 `exec_state` (`EXECUTED`/`TESTED`/`VERIFIED`) + `verdict`, and appends hash-chained `evidence`. |
-| 6 | `sen undo [task_id]` | Byte-for-byte rollback of an `OPEN` task from `.sen/snapshots/<task_id>/` and quarantine reset. |
-| 7 | `sen done [-- <suite_bin> <args...>]` | Verifies `evidence` & `ssds_governance` hash chains, active `EXC-*` expirations, `P1/P2` baseline hashes, `P1..P6` gate/approval completion, and 100% requirement coverage; writes `.sen/delivery-report.md`. |
-| 8 | `sen status [--approve] [--express]` | Displays profile, express mode, rules, requirements, tasks (`[QUARANTINE 3/3]`), and evidence chain; `--approve` unlocks quarantined tasks. |
-| 9 | `sen sdlc <subcommand>` | Full `SEN-STD-SDLC-001` engine: `classify`, `status [--report]`, `gate [P]`, `review`, `approve`, `impact`, `exception`, `sync`, and `version [--changelog \| --check \| --upgrade \| --rollback]`. |
+- **Giấy phép:** Mã nguồn mở theo giấy phép [MIT License](LICENSE).
+- **Kho lưu trữ chính thức:** [https://github.com/developerfs0110/Sen-VN](https://github.com/developerfs0110/Sen-VN)
+- **Văn bản quy chuẩn gốc:** SEN-STD-SDLC-001 v1.0.0 (`internal/ssds/versions/v1.0.0/standard.md`).
+- **Danh mục phiên bản phát hành:** [docs/releases/README.md](docs/releases/README.md).
 
 ---
 
-## 8-Table SQLite Schema (`.sen/state.db`, WAL Mode)
+## ☕ 7. Ủng Hộ Tác Giả & Đóng Góp Phát Triển (Donate)
 
-1. `rules` — Persistent user constraints (`COUNT(*) <= 20` hard cap).
-2. `requirements` — Verbatim user quotes & typed SSDS requirements (`REQ-F/NF/BR/CON`, `R1..Rn`, `R_sec`, `R_law`).
-3. `tasks` — Scoped tasks with `phase_id`, `arch_components_json`, `risk_auto`, SSDS §20 `exec_state` (`IMPLEMENTED..VERIFIED`), and `verdict`.
-4. `snapshots` — Git-independent `__BASELINE__` manifest + per-task backups and locked test/raw-media markers.
-5. `evidence` — Tamper-evident SHA-256 hash chain of real subprocess verification outputs.
-6. `ssds_project` — Per-project UUIDv4, pinned `applied_ssds_version`, 7-category classification, workflow tier, and 8-dimension risk profile.
-7. `ssds_phases` — Lifecycle state (`P0..P9`), engineering roles, verified deliverable SHA-256 hashes, gate flags, and user approval quotes.
-8. `ssds_governance` — Tamper-evident SHA-256 hash chain of `REVIEW`, `DECISION`, `CHANGE_IMPACT` (`CIA-*`), and time-bounded `EXCEPTION` (`EXC-*`) records.
+**Sen-VN** là dự án mã nguồn mở được kiến trúc và phát triển hoàn toàn độc lập với khát vọng nâng tầm tính kỷ luật, chất lượng và vị thế của cộng đồng lập trình viên Việt Nam trong kỷ nguyên AI.
+
+Nếu Sen-VN giúp ích cho công việc của bạn, bảo vệ tài nguyên dự án và mang lại sự yên tâm khi làm việc cùng AI, mọi sự ủng hộ của bạn đều là nguồn động lực quý báu để tác giả tiếp tục nâng cấp và duy trì dự án:
+
+<div align="center">
+
+### 👤 Tác giả & Chủ nhiệm Kiến trúc: **Mr Bòn Bon** (anh Gấu)
+📧 **Email:** `tunbh.study@gmail.com`  
+📱 **Hotline / Zalo:** `(+84) 793.166.866` • `(+84) 96.158.1163`  
+
+🏦 **Tài khoản Ngân hàng Nhận Ủng Hộ (TPBank):**
+```text
+Ngân hàng: TPBank (Ngân hàng TMCP Tiên Phong)
+Số tài khoản: 61.222.666.888
+Chủ tài khoản: BUI HAI TUN
+```
+
+*Trân trọng cảm ơn sự đồng hành và tin tưởng của anh em và cộng đồng phát triển phần mềm!* 🪷
+
+</div>

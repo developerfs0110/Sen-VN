@@ -76,10 +76,12 @@ function Merge-SenAntigravityHooks {
             $short = $fso.GetFile($cmdExe).ShortPath
             if (-not [string]::IsNullOrWhiteSpace($short) -and $short -notmatch '\s') {
                 $cmdExe = $short
-            } else {
+            }
+            else {
                 $cmdExe = '"' + $cmdExe + '"'
             }
-        } catch {
+        }
+        catch {
             $cmdExe = '"' + $cmdExe + '"'
         }
     }
@@ -87,9 +89,9 @@ function Merge-SenAntigravityHooks {
         SessionStart  = @(@{ type = "command"; command = "$cmdExe brief --hook SessionStart" })
         PreInvocation = @(@{ type = "command"; command = "$cmdExe brief --hook PreInvocation" })
         PreToolUse    = @(@{
-            matcher = "*"
-            hooks   = @(@{ type = "command"; command = "$cmdExe brief --hook PreToolUse" })
-        })
+                matcher = "*"
+                hooks   = @(@{ type = "command"; command = "$cmdExe brief --hook PreToolUse" })
+            })
         Stop          = @(@{ type = "command"; command = "$cmdExe brief --hook Stop" })
     }
     $jsonText = ($rootObj | ConvertTo-Json -Depth 10) + "`n"
@@ -145,12 +147,14 @@ try {
             throw "Could not find SHA-256 entry for $assetName in checksums.txt."
         }
         $sourceFile = $tempDownload
-    } elseif ($BinarySource -match '^https://') {
+    }
+    elseif ($BinarySource -match '^https://') {
         $tempDownload = Join-Path ([System.IO.Path]::GetTempPath()) ("sen-download-" + [guid]::NewGuid().ToString("N") + ".exe")
         Write-Host "Downloading sen.exe from $BinarySource ..."
         Invoke-WebRequest -Uri $BinarySource -OutFile $tempDownload -UseBasicParsing
         $sourceFile = $tempDownload
-    } else {
+    }
+    else {
         $sourceFile = (Resolve-Path -Path $BinarySource -ErrorAction Stop).Path
         if ([string]::IsNullOrWhiteSpace($ExpectedSha256) -and (Test-Path -LiteralPath "$sourceFile.sha256")) {
             $ExpectedSha256 = (((Get-Content -LiteralPath "$sourceFile.sha256" -Raw).Trim()) -split '\s+')[0]
@@ -165,7 +169,8 @@ try {
             throw "SHA-256 verification FAILED! Expected $wantHash, got $actualHash."
         }
         Write-Host "SHA-256 verified: $actualHash"
-    } else {
+    }
+    else {
         Write-Host "Computed SHA-256: $actualHash"
     }
 
@@ -204,7 +209,8 @@ try {
         $initArgs = @("init")
         if ($Update -and (Test-Path -LiteralPath (Join-Path $wsPath ".sen\state.db")) -and [string]::IsNullOrWhiteSpace($Packs)) {
             $initArgs += "--update"
-        } else {
+        }
+        else {
             if (-not $SkipCompanions) { $initArgs += "--install-companions" }
             if (-not [string]::IsNullOrWhiteSpace($Packs)) { $initArgs += @("--packs", $Packs) }
             if ($Update) { $initArgs += "--update" }
@@ -215,11 +221,13 @@ try {
             if ($LASTEXITCODE -ne 0) {
                 throw "Workspace command 'sen $($initArgs -join ' ')' failed with exit code $LASTEXITCODE."
             }
-        } finally {
+        }
+        finally {
             Pop-Location
         }
     }
-} finally {
+}
+finally {
     if ($null -ne $tempDownload -and (Test-Path -LiteralPath $tempDownload)) { Remove-Item -LiteralPath $tempDownload -Force -ErrorAction SilentlyContinue }
     if ($null -ne $tempChecksums -and (Test-Path -LiteralPath $tempChecksums)) { Remove-Item -LiteralPath $tempChecksums -Force -ErrorAction SilentlyContinue }
 }
