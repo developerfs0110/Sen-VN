@@ -18,3 +18,9 @@ Always follow this 9-command workflow (`sen` on PATH or `./bin/sen`). Only `sen`
 ## 3. Non-Negotiable Guardrails & Progressive Companion Routing (0 Idle Tokens)
 - Never edit `.sen/`, cross into nested subprojects, write code in `P0..P3`, mutate approved `P1/P2` baselines without `CIA-*`, claim `PASS` without `evidence`, or touch locked tests / raw media (`raw/`, `master/`, `footage/`, `originals/`).
 - Route installed `.agents/` companions (`sen init --install-companions`): `sen-dialectical` (`MEDIUM/LARGE`), `systematic-debugging` (`--bugfix`), `brainstorming` + `writing-plans` (`LARGE`), `security-audit` (`--security`), `vn-law-check` (`--vn-law`), `sen-skill-capture`.
+
+## 4. Mandatory Pre-Push & Release Protocol (Quy Trình Bắt Buộc Trước Khi Push Git)
+1. **Vệ sinh thư mục (Zero-Trash):** Thư mục chuẩn bị push phải sạch 100% (`git status --porcelain` sạch, không chứa file rác, file tạm, log thừa).
+2. **Logic-Doc Sync:** Tất cả tài liệu (`README.md`, `README.vi.md`, `README.en.md`, `CHANGELOG.md`, `docs/CONTEXT.md`) bắt buộc đồng bộ chính xác với mã nguồn và thông tin tác giả/donate.
+3. **Bilingual Release Notes Folder:** Mỗi lần update lõi/push git bắt buộc lưu trữ cặp Release Note song ngữ trong folder `docs/releases/` (`vX.Y.Z.md` tiếng Việt + `vX.Y.Z.en.md` tiếng Anh) và cập nhật mục lục `docs/releases/README.md`.
+4. **CI Auto-Heal Loop:** Trên mọi lượt Git push, bắt buộc chạy kiểm thử và giám sát CI remote (`Invoke-SenCiPushLoop`) cho đến khi 100% xanh trên cả 3 hệ điều hành.

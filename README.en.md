@@ -152,7 +152,7 @@ If Sen-VN helps you save time, protect your codebase, and bring peace of mind to
 ```text
 Bank: TPBank (Tien Phong Commercial Joint Stock Bank)
 Account Number: 61.222.666.888
-Account Holder: BUI HAI TUN
+Account Holder: NGUYEN BA HUU TU
 ```
 
 *Thank you for your generous support and partnership!* 🪷

@@ -152,7 +152,7 @@ Nếu Sen-VN giúp ích cho công việc của bạn, bảo vệ tài nguyên d�
 ```text
 Ngân hàng: TPBank (Ngân hàng TMCP Tiên Phong)
 Số tài khoản: 61.222.666.888
-Chủ tài khoản: BUI HAI TUN
+Chủ tài khoản: NGUYEN BA HUU TU
 ```
 
 *Trân trọng cảm ơn sự đồng hành và tin tưởng của anh em và cộng đồng phát triển phần mềm!* 🪷
