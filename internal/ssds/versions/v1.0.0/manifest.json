@@ -1,0 +1,265 @@
+{
+  "standard_id": "SEN-STD-SDLC-001",
+  "version": "1.0.0",
+  "classification": "System-level Engineering Standard",
+  "categories": [
+    "GREENFIELD",
+    "BROWNFIELD",
+    "MAINTENANCE",
+    "MIGRATION",
+    "INTEGRATION",
+    "PROTOTYPE",
+    "RESEARCH"
+  ],
+  "workflows": {
+    "WF_MICRO": ["P1", "P3", "P5", "P6", "P8"],
+    "WF_STANDARD": ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"],
+    "WF_CRITICAL": ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"]
+  },
+  "risk_dimensions": [
+    "complexity",
+    "business_impact",
+    "technical_risk",
+    "security_sensitivity",
+    "data_criticality",
+    "deployment_risk",
+    "regulatory_constraints",
+    "reversibility"
+  ],
+  "requirement_prefixes": {
+    "FUNC": "^REQ-F-\\d+$",
+    "NON_FUNC": "^REQ-NF-\\d+$",
+    "BUS_RULE": "^REQ-BR-\\d+$",
+    "CONSTRAINT": "^REQ-CON-\\d+$"
+  },
+  "phase_statuses": [
+    "NOT_STARTED",
+    "IN_PROGRESS",
+    "BLOCKED",
+    "REVIEW_REQUIRED",
+    "APPROVED",
+    "COMPLETED"
+  ],
+  "task_states": [
+    "IMPLEMENTED",
+    "EXECUTED",
+    "TESTED",
+    "VERIFIED",
+    "BLOCKED"
+  ],
+  "verdicts": [
+    "PASS",
+    "FAIL",
+    "NOT_EXECUTED",
+    "NOT_VERIFIED",
+    "BLOCKED",
+    "NOT_APPLICABLE"
+  ],
+  "authority_levels": [
+    "MINOR",
+    "MAJOR",
+    "CRITICAL"
+  ],
+  "evidence_modes": [
+    "SELF_REVIEW",
+    "INDEPENDENT_AI_REVIEW",
+    "AUTOMATED_VALIDATION",
+    "HUMAN_APPROVAL"
+  ],
+  "phases": [
+    {
+      "phase_id": "P0",
+      "title": "Project Intake and Initial Assessment",
+      "primary_role": "Product Manager / Business Analyst",
+      "supporting_roles": ["System Analyst"],
+      "required_deliverables": ["docs/00-project-charter.md"],
+      "required_headings": {
+        "docs/00-project-charter.md": [
+          "Project Overview",
+          "Problem Statement",
+          "Business Objectives",
+          "Target Users",
+          "Initial Scope",
+          "Constraints",
+          "Initial Risks",
+          "Success Metrics"
+        ]
+      },
+      "requires_user_approval": false,
+      "requires_independent_review": false
+    },
+    {
+      "phase_id": "P1",
+      "title": "Requirements Analysis",
+      "primary_role": "Senior Business Analyst",
+      "supporting_roles": ["Product Manager", "System Analyst"],
+      "required_deliverables": ["docs/01-requirements.md"],
+      "required_headings": {
+        "docs/01-requirements.md": [
+          "Project Overview",
+          "Business Objectives",
+          "Stakeholders",
+          "User Personas",
+          "Scope",
+          "Out of Scope",
+          "Functional Requirements",
+          "Non-functional Requirements",
+          "User Stories",
+          "Business Rules",
+          "Acceptance Criteria",
+          "Constraints",
+          "Assumptions",
+          "Risks",
+          "Open Questions",
+          "Requirement Traceability"
+        ]
+      },
+      "micro_deliverables": ["docs/01-requirements.md"],
+      "micro_headings": {
+        "docs/01-requirements.md": [
+          "Project Overview",
+          "Scope",
+          "Functional Requirements",
+          "User Stories",
+          "Acceptance Criteria"
+        ]
+      },
+      "requires_user_approval": true,
+      "requires_independent_review": true
+    },
+    {
+      "phase_id": "P2",
+      "title": "System Analysis and Architecture Design",
+      "primary_role": "Principal Software Architect",
+      "supporting_roles": ["System Analyst", "Database Architect", "Security Architect", "UX/UI Designer"],
+      "required_deliverables": ["docs/02-architecture.md"],
+      "required_headings": {
+        "docs/02-architecture.md": [
+          "Architecture",
+          "Technology Stack",
+          "System Boundaries",
+          "Components",
+          "Security"
+        ]
+      },
+      "requires_user_approval": true,
+      "requires_independent_review": true
+    },
+    {
+      "phase_id": "P3",
+      "title": "Project Planning and Technical Specification",
+      "primary_role": "Technical Project Manager",
+      "supporting_roles": ["Software Architect", "Technical Lead", "QA Engineer", "DevOps Engineer"],
+      "required_deliverables": ["docs/08-task-breakdown.md", "docs/traceability-matrix.md"],
+      "required_headings": {
+        "docs/08-task-breakdown.md": [
+          "Milestones",
+          "Tasks"
+        ]
+      },
+      "micro_deliverables": ["docs/traceability-matrix.md"],
+      "micro_headings": {},
+      "requires_user_approval": false,
+      "requires_independent_review": false
+    },
+    {
+      "phase_id": "P4",
+      "title": "Development Environment and Foundation",
+      "primary_role": "Lead DevOps Engineer",
+      "supporting_roles": ["Software Architect", "Senior Software Engineer", "Security Engineer"],
+      "required_deliverables": ["README.md"],
+      "required_headings": {},
+      "requires_user_approval": false,
+      "requires_independent_review": false
+    },
+    {
+      "phase_id": "P5",
+      "title": "Implementation",
+      "primary_role": "Senior Software Engineer / Tech Lead",
+      "supporting_roles": ["Backend Engineer", "Frontend Engineer", "Mobile Engineer", "Database Engineer", "Security Engineer"],
+      "required_deliverables": [],
+      "required_headings": {},
+      "requires_user_approval": false,
+      "requires_independent_review": true
+    },
+    {
+      "phase_id": "P6",
+      "title": "Quality Assurance and Security Validation",
+      "primary_role": "QA Lead / Independent Test Engineer",
+      "supporting_roles": ["Test Automation Engineer", "Security Engineer", "Performance Engineer"],
+      "required_deliverables": [
+        "docs/testing/test-plan.md",
+        "docs/testing/test-cases.md",
+        "docs/testing/test-results.md",
+        "docs/testing/security-report.md"
+      ],
+      "required_headings": {
+        "docs/testing/test-plan.md": ["Scope", "Strategy"],
+        "docs/testing/test-cases.md": ["Test Cases"],
+        "docs/testing/test-results.md": ["Test Results", "Summary"],
+        "docs/testing/security-report.md": ["Security"]
+      },
+      "micro_deliverables": [
+        "docs/testing/test-plan.md",
+        "docs/testing/test-cases.md",
+        "docs/testing/test-results.md"
+      ],
+      "micro_headings": {
+        "docs/testing/test-plan.md": ["Scope", "Strategy"],
+        "docs/testing/test-cases.md": ["Test Cases"],
+        "docs/testing/test-results.md": ["Test Results", "Summary"]
+      },
+      "requires_user_approval": true,
+      "requires_independent_review": true
+    },
+    {
+      "phase_id": "P7",
+      "title": "Release and Deployment",
+      "primary_role": "Release Manager / DevOps Engineer",
+      "supporting_roles": ["Site Reliability Engineer", "Database Engineer", "Security Engineer", "QA Engineer"],
+      "required_deliverables": ["docs/release-plan.md"],
+      "required_headings": {
+        "docs/release-plan.md": [
+          "Release Notes",
+          "Deployment",
+          "Rollback Plan"
+        ]
+      },
+      "requires_user_approval": true,
+      "requires_independent_review": false
+    },
+    {
+      "phase_id": "P8",
+      "title": "Documentation and Handover",
+      "primary_role": "Technical Writer",
+      "supporting_roles": ["Software Architect", "Technical Lead", "QA Engineer", "DevOps Engineer"],
+      "required_deliverables": ["README.md", "CHANGELOG.md"],
+      "required_headings": {
+        "README.md": [
+          "Installation",
+          "Usage"
+        ]
+      },
+      "micro_deliverables": ["README.md"],
+      "micro_headings": {
+        "README.md": [
+          "Installation",
+          "Usage"
+        ]
+      },
+      "requires_user_approval": false,
+      "requires_independent_review": false
+    },
+    {
+      "phase_id": "P9",
+      "title": "Maintenance and Continuous Improvement",
+      "primary_role": "Maintenance Lead / SRE",
+      "supporting_roles": ["Business Analyst", "QA Engineer", "Senior Software Engineer", "Security Engineer"],
+      "required_deliverables": ["PROJECT_STATUS.md"],
+      "required_headings": {},
+      "requires_user_approval": false,
+      "requires_independent_review": false
+    }
+  ]
+}
+

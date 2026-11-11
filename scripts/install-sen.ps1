@@ -1,10 +1,10 @@
 ﻿<#
 .SYNOPSIS
-    Trình cài đặt và cập nhật `sen.exe` v1.1.0 an toàn cho Windows (không cần quyền Quản trị viên / UAC).
+    Trình cài đặt và cập nhật `sen.exe` v1.2.0 + SSDS v1.0.0 an toàn cho Windows (không cần quyền Quản trị viên / UAC).
 .DESCRIPTION
     Cài đặt hoặc cập nhật (`-Update`) `sen.exe` vào `%LOCALAPPDATA%\Programs\sen\bin`, xác thực chữ ký SHA-256,
-    chặn giao thức HTTP không mã hóa, cập nhật User PATH và tùy chọn khởi tạo ngay không gian làm việc (`-Workspace`)
-    kèm bộ kỹ năng đồng hành mặc định và các gói mở rộng (`-Packs`).
+    chặn giao thức HTTP không mã hóa, cập nhật User PATH, hợp nhất Antigravity Lifecycle Hooks vào `~/.gemini/config/hooks.json`
+    (giữ nguyên các hook khác của người dùng, bật/tắt qua `-ConfigureHooks:$true/$false`), và tùy chọn khởi tạo không gian làm việc (`-Workspace`).
 #>
 [CmdletBinding()]
 param(
@@ -34,12 +34,69 @@ param(
     [switch]$Update,
 
     [Parameter(Mandatory = $false)]
-    [switch]$SkipUserPath
+    [switch]$SkipUserPath,
+
+    [Parameter(Mandatory = $false)]
+    [bool]$ConfigureHooks = $true,
+
+    [Parameter(Mandatory = $false)]
+    [string]$HooksConfigPath = (Join-Path $HOME ".gemini\config\hooks.json")
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+# Hợp nhất khóa "sen-vn" vào tệp hooks.json của Antigravity mà không ghi đè các khóa hook khác sẵn có.
+function Merge-SenAntigravityHooks {
+    param(
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][string]$ExePath
+    )
+    $parentDir = Split-Path -Parent $ConfigPath
+    if (-not [string]::IsNullOrWhiteSpace($parentDir) -and (-not (Test-Path -LiteralPath $parentDir))) {
+        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+    }
+    $rootObj = [ordered]@{}
+    if (Test-Path -LiteralPath $ConfigPath) {
+        $rawJson = Get-Content -LiteralPath $ConfigPath -Raw -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($rawJson)) {
+            $parsed = $rawJson | ConvertFrom-Json
+            foreach ($prop in $parsed.PSObject.Properties) {
+                if ($prop.Name -ne "sen-mvp") {
+                    $rootObj[$prop.Name] = $prop.Value
+                }
+            }
+        }
+    }
+    $cmdExe = $ExePath
+    if ($cmdExe -match '\s') {
+        try {
+            $fso = New-Object -ComObject Scripting.FileSystemObject
+            $short = $fso.GetFile($cmdExe).ShortPath
+            if (-not [string]::IsNullOrWhiteSpace($short) -and $short -notmatch '\s') {
+                $cmdExe = $short
+            } else {
+                $cmdExe = '"' + $cmdExe + '"'
+            }
+        } catch {
+            $cmdExe = '"' + $cmdExe + '"'
+        }
+    }
+    $rootObj["sen-vn"] = [ordered]@{
+        SessionStart  = @(@{ type = "command"; command = "$cmdExe brief --hook SessionStart" })
+        PreInvocation = @(@{ type = "command"; command = "$cmdExe brief --hook PreInvocation" })
+        PreToolUse    = @(@{
+            matcher = "*"
+            hooks   = @(@{ type = "command"; command = "$cmdExe brief --hook PreToolUse" })
+        })
+        Stop          = @(@{ type = "command"; command = "$cmdExe brief --hook Stop" })
+    }
+    $jsonText = ($rootObj | ConvertTo-Json -Depth 10) + "`n"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($ConfigPath, $jsonText, $utf8NoBom)
+    Write-Host "Registered Antigravity lifecycle hooks ('sen-vn') in: $ConfigPath"
+}
 
 # Nếu chạy từ bản clone cục bộ đã biên dịch sẵn `sen.exe` (không truyền `-Repo` và không bật `-Update`), ưu tiên dùng tệp nội bộ.
 $explicitSource = $PSBoundParameters.ContainsKey("BinarySource") -and (-not [string]::IsNullOrWhiteSpace($BinarySource))
@@ -132,6 +189,11 @@ try {
         }
     }
     Write-Host "Installed sen.exe successfully at: $targetExe"
+
+    # Hợp nhất Antigravity Lifecycle Hooks vào ~/.gemini/config/hooks.json khi được bật (-ConfigureHooks:$true).
+    if ($ConfigureHooks -and (-not [string]::IsNullOrWhiteSpace($HooksConfigPath))) {
+        Merge-SenAntigravityHooks -ConfigPath $HooksConfigPath -ExePath $targetExe
+    }
 
     # Khởi tạo hoặc cập nhật ngay không gian làm việc và gói kỹ năng nếu truyền tham số -Workspace.
     if (-not [string]::IsNullOrWhiteSpace($Workspace)) {

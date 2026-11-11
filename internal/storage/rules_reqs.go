@@ -1,4 +1,4 @@
-// Tệp rules_reqs.go quản lý bảng luật dự án (rules <= 20) và bảng yêu cầu truy vết nguyên văn (requirements).
+// Tệp rules_reqs.go quản lý bảng luật dự án (rules <= 20) và bảng yêu cầu truy vết nguyên văn + phân loại SSDS (requirements).
 package storage
 
 import (
@@ -20,14 +20,17 @@ type Rule struct {
 	CreatedAt string
 }
 
-// Requirement lưu trữ yêu cầu R1..Rn (hoặc R_sec, R_law) gắn với câu nhắc nguyên văn của người dùng.
+// Requirement lưu trữ yêu cầu R1..Rn hoặc mã chuẩn SSDS (REQ-F/NF/BR/CON-xxx) gắn với tiêu chí nghiệm thu và mã băm tài liệu.
 type Requirement struct {
-	ID        string
-	UserQuote string
-	Summary   string
-	IsBugfix  bool
-	Approved  bool
-	CreatedAt string
+	ID                 string
+	ReqType            string
+	UserQuote          string
+	Summary            string
+	AcceptanceCriteria string
+	DocSHA256          string
+	IsBugfix           bool
+	Approved           bool
+	CreatedAt          string
 }
 
 // AddRule thêm một luật mới vào sổ cái sau khi lọc secret và kiểm tra trần cứng 20 luật trong giao dịch.
@@ -120,53 +123,80 @@ func (s *Store) ListRules() ([]Rule, error) {
 	return out, rows.Err()
 }
 
-// AddRequirement ghi mới hoặc cập nhật yêu cầu (bảo toàn cờ approved và câu trích dẫn gốc nếu đã có).
+// AddRequirement ghi mới hoặc cập nhật yêu cầu tương thích ngược 100% (bảo toàn cờ approved và câu trích dẫn gốc nếu đã có).
 func (s *Store) AddRequirement(explicitID, userQuote, summary string, isBugfix bool) (*Requirement, error) {
+	return s.UpsertTypedRequirement(explicitID, "", userQuote, summary, "", "", isBugfix)
+}
+
+// UpsertTypedRequirement ghi mới hoặc đồng bộ yêu cầu phân loại chuẩn SSDS (FUNC, NON_FUNC, BUS_RULE, CONSTRAINT) kèm SHA-256 tài liệu.
+func (s *Store) UpsertTypedRequirement(
+	id, reqType, userQuote, summary, acceptanceCriteria, docSHA256 string,
+	isBugfix bool,
+) (*Requirement, error) {
 	summary = redact.ScrubText(strings.TrimSpace(summary))
 	userQuote = redact.ScrubText(strings.TrimSpace(userQuote))
+	acceptanceCriteria = redact.ScrubText(strings.TrimSpace(acceptanceCriteria))
+	docSHA256 = strings.TrimSpace(docSHA256)
 	if summary == "" {
 		return nil, errors.New("requirement summary cannot be empty")
 	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	id := strings.TrimSpace(explicitID)
-	if id == "" {
+	cleanID := strings.TrimSpace(id)
+	if cleanID == "" {
 		nextID, err := nextRequirementID(tx)
 		if err != nil {
 			return nil, err
 		}
-		id = nextID
+		cleanID = nextID
+	}
+	normType, err := normalizeReqType(cleanID, reqType)
+	if err != nil {
+		return nil, err
 	}
 
 	ts := nowUTC()
-	bugInt := 0
-	if isBugfix {
-		bugInt = 1
-	}
-	// Khi ghi đè R_sec/R_law, giữ nguyên trạng thái approved, cờ is_bugfix=1 và user_quote thực tế ban đầu.
+	bugInt := boolToInt(isBugfix)
 	_, err = tx.Exec(`
-		INSERT INTO requirements (id, user_quote, summary, is_bugfix, approved, created_at)
-		VALUES (?, ?, ?, ?, 0, ?)
+		INSERT INTO requirements (id, req_type, user_quote, summary, acceptance_criteria, doc_sha256, is_bugfix, approved, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
 		ON CONFLICT(id) DO UPDATE SET
+			req_type = excluded.req_type,
 			user_quote = CASE
 				WHEN requirements.user_quote != '' AND (excluded.user_quote = '' OR excluded.user_quote = 'companion-compliance-anchor')
 				THEN requirements.user_quote
 				ELSE excluded.user_quote
 			END,
 			summary = excluded.summary,
+			acceptance_criteria = CASE
+				WHEN excluded.acceptance_criteria != '' THEN excluded.acceptance_criteria
+				ELSE requirements.acceptance_criteria
+			END,
+			doc_sha256 = CASE
+				WHEN excluded.doc_sha256 != '' THEN excluded.doc_sha256
+				ELSE requirements.doc_sha256
+			END,
 			is_bugfix = CASE WHEN requirements.is_bugfix = 1 THEN 1 ELSE excluded.is_bugfix END
-	`, id, userQuote, summary, bugInt, ts)
+	`, cleanID, normType, userQuote, summary, acceptanceCriteria, docSHA256, bugInt, ts)
 	if err != nil {
 		return nil, err
 	}
+
 	var saved Requirement
 	var sBug, sApp int
-	if err := tx.QueryRow(`SELECT id, user_quote, summary, is_bugfix, approved, created_at FROM requirements WHERE id = ?`, id).
-		Scan(&saved.ID, &saved.UserQuote, &saved.Summary, &sBug, &sApp, &saved.CreatedAt); err != nil {
+	err = tx.QueryRow(`
+		SELECT id, req_type, user_quote, summary, acceptance_criteria, doc_sha256, is_bugfix, approved, created_at
+		FROM requirements WHERE id = ?
+	`, cleanID).Scan(
+		&saved.ID, &saved.ReqType, &saved.UserQuote, &saved.Summary,
+		&saved.AcceptanceCriteria, &saved.DocSHA256, &sBug, &sApp, &saved.CreatedAt,
+	)
+	if err != nil {
 		return nil, err
 	}
 	saved.IsBugfix = sBug != 0
@@ -177,9 +207,12 @@ func (s *Store) AddRequirement(explicitID, userQuote, summary string, isBugfix b
 	return &saved, nil
 }
 
-// ListRequirements trả về toàn bộ yêu cầu theo đúng thứ tự tiếp nhận ban đầu.
+// ListRequirements trả về toàn bộ yêu cầu theo đúng thứ tự tiếp nhận ban đầu trong sổ cái.
 func (s *Store) ListRequirements() ([]Requirement, error) {
-	rows, err := s.db.Query(`SELECT id, user_quote, summary, is_bugfix, approved, created_at FROM requirements ORDER BY rowid ASC`)
+	rows, err := s.db.Query(`
+		SELECT id, req_type, user_quote, summary, acceptance_criteria, doc_sha256, is_bugfix, approved, created_at
+		FROM requirements ORDER BY rowid ASC
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +221,10 @@ func (s *Store) ListRequirements() ([]Requirement, error) {
 	for rows.Next() {
 		var r Requirement
 		var bug, app int
-		if err := rows.Scan(&r.ID, &r.UserQuote, &r.Summary, &bug, &app, &r.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&r.ID, &r.ReqType, &r.UserQuote, &r.Summary,
+			&r.AcceptanceCriteria, &r.DocSHA256, &bug, &app, &r.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		r.IsBugfix = bug != 0
@@ -204,7 +240,31 @@ func (s *Store) ApproveAllRequirements() error {
 	return err
 }
 
-// nextRequirementID sinh mã tuần tự R1, R2, ... dựa trên chỉ số lớn nhất hiện có trong bảng requirements.
+// normalizeReqType chuẩn hóa hoặc tự động suy diễn loại yêu cầu từ tiền tố định danh SSDS (REQ-F/NF/BR/CON-*).
+func normalizeReqType(id, rawType string) (string, error) {
+	t := strings.ToUpper(strings.TrimSpace(rawType))
+	if t != "" {
+		switch t {
+		case "FUNC", "NON_FUNC", "BUS_RULE", "CONSTRAINT":
+			return t, nil
+		default:
+			return "", fmt.Errorf("invalid requirement req_type %q: must be FUNC, NON_FUNC, BUS_RULE, or CONSTRAINT", rawType)
+		}
+	}
+	upperID := strings.ToUpper(strings.TrimSpace(id))
+	switch {
+	case strings.HasPrefix(upperID, "REQ-NF-"):
+		return "NON_FUNC", nil
+	case strings.HasPrefix(upperID, "REQ-BR-"):
+		return "BUS_RULE", nil
+	case strings.HasPrefix(upperID, "REQ-CON-"):
+		return "CONSTRAINT", nil
+	default:
+		return "FUNC", nil
+	}
+}
+
+// nextRequirementID sinh mã tuần tự R1, R2, ... mà không xung đột khi tồn tại song song các mã REQ-F-001, R_sec, R_law.
 func nextRequirementID(tx *sql.Tx) (string, error) {
 	rows, err := tx.Query(`SELECT id FROM requirements`)
 	if err != nil {
@@ -217,7 +277,7 @@ func nextRequirementID(tx *sql.Tx) (string, error) {
 		if err := rows.Scan(&existing); err != nil {
 			return "", err
 		}
-		if strings.HasPrefix(existing, "R") {
+		if len(existing) > 1 && existing[0] == 'R' && existing[1] >= '0' && existing[1] <= '9' {
 			if n, err := strconv.Atoi(existing[1:]); err == nil && n > maxN {
 				maxN = n
 			}

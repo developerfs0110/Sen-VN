@@ -1,75 +1,75 @@
-# Sen-VN v1.1.0
+# Sen-VN v1.2.0
 
-**Deterministic AI Coding & Creative Workspace Referee (`sen`)** — zero paid API keys, zero CGO, zero Docker required, packaged as a Zero-Build GitHub repository and native **Antigravity Plugin**.
+**Deterministic AI Coding, SEN-STD-SDLC-001 (`SSDS v1.0.0`) Lifecycle & Creative Workspace Referee (`sen`)** — zero paid API keys, zero CGO, zero Docker required, packaged as a Zero-Build GitHub repository and native **Antigravity Plugin**.
 
 ---
 
-## Why Sen-VN?
+## Why Sen-VN v1.2.0 + SSDS v1.0.0?
 
-AI agents frequently hallucinate completion: running `go test` on packages with `[no test files]`, weakening existing unit tests to turn red builds green, modifying out-of-scope files, overwriting raw video footage with `ffmpeg`, spinning in endless broken retry loops, or leaking environment secrets into logs.
+AI agents frequently jump straight from a prompt into writing production code without requirements or architecture, fabricate `"PASS"` results for unexecuted tests, mutate approved architecture baselines silently, contaminate sibling repositories in multi-project workspaces, or spin in endless broken retry loops.
 
-**Sen-VN v1.1.0** acts as an unforgeable local referee backed by a frozen 5-table SQLite WAL ledger (`.sen/state.db`) and exact 8 CLI commands:
-1. **Detection-First (Any IDE) + Pre-Execution Prevention (Antigravity):** Works everywhere via a ~36-line `AGENTS.md` Bookend Protocol, and upgrades to pre-tool prevention on Antigravity via `hooks.json` (`SessionStart`, `PreInvocation`, `PreToolUse`, `Stop`).
-2. **3-Tier Deterministic Sizing (`SMALL` / `MEDIUM` / `LARGE`) & Safe `--express` Mode:** Automatically sizes tasks (`<=2` files `SMALL`, `3-5` files `MEDIUM`, `>5` files / `bugfix` / critical / `--allow-delete` `LARGE`). Saying *"làm luôn đi"* / *"just do it"* or passing `--express` runs `SMALL`/`MEDIUM` and non-destructive `LARGE` tasks autonomously while still forcing human confirmation (`force_ask`) on destructive (`--allow-delete`) or critical (`.env`, `auth/`, `payment/`, DB migration) operations. `.sen/config.json` is SHA-256 signed (`.sen/config.sha256`) so agents cannot self-enable `express_mode`.
-3. **Bounded Repair Loop (`<= 3` Rounds) & Dialectical Audit:** Blocks the 4th consecutive failed `sen verify` (`[QUARANTINE 3/3]`), lets the `Stop` hook exit cleanly without infinite loops, and guides objective root-cause analysis (`sen-dialectical`) before human unlock (`sen status --approve`) or rollback (`sen undo`).
-4. **Multi-Domain & Video Production Integrity (`ffprobe` + Raw Media Lock):** Auto-detects `code`, `web`, `video`, `media`, and `docs` profiles (`--profile`). Protects `raw/`, `master/`, `footage/`, and `originals/` assets from modification or in-place `ffmpeg` overwrites (`>10MB` tracked via zero-copy `size + mtime_ns`), and validates rendered media streams, codecs, dimensions, and duration via `ffprobe` (`MEDIA` strength).
-5. **1-Command Companion Bundle + Fork Fallback + Optional Packs:** `sen init --install-companions` installs missing core companions (`superpowers`, `security-audit`, `vn-law-check`, `sen-dialectical`, `sen-skill-capture`) pinned by commit with automatic `developerfs0110/...` fork fallback, skipping already-installed skills (`[exists]`). Optional packs (`--packs list|all|workflow-diagram,media-video,media-image,voice-tts,media-3d`) and atomic `.bak`-backed updates (`sen init --update`) are built in.
+**Sen-VN v1.2.0** compiles the entire **SEN SOFTWARE DEVELOPMENT STANDARD (`SEN-STD-SDLC-001 v1.0.0`, 7 Parts / 28 Sections)** into an unforgeable local state machine backed by an **8-table SQLite WAL ledger (`.sen/state.db`)** and **9 CLI commands**:
+
+1. **Zero-Prompt Automatic SSDS Activation (§3.1–§3.4):** `PreInvocation` detects software creation/modification requests (bilingual Vietnamese & English across 15 software domains), audits existing Brownfield repos (§2.3), selects `WF_MICRO | WF_STANDARD | WF_CRITICAL`, pins `applied_ssds_version = "1.0.0"`, and emits the `[SSDS v1.0.0 — Đã kích hoạt tự động]` Workflow Declaration banner — while pure Q&A queries and non-code media/docs folders stay untouched.
+2. **10-Phase State Machine (`P0..P9`) & Pre-Execution Write Firewall (§5–§14, §22):** `PreToolUse` and `sen begin` physically block premature production code edits during `P0` (Charter), `P1` (Requirements), `P2` (Architecture/ADRs), and `P3` (Planning), separate `REVIEW_REQUIRED` from `APPROVED` (`Silence != Approval`, §21), and reject hollow `TBD/TODO` deliverables.
+3. **27 Engineering Roles, Honest Review, 6-Link Traceability & CIA Lock (§4.3, §16–§20, §27):** Enforces `author_role != reviewer_role`, downgrades unverified `INDEPENDENT_AI_REVIEW` to `SELF_REVIEW` with explicit disclosure, locks approved `P1/P2` baselines until a 10-dimension `CIA-*` Change Impact Analysis is recorded, cross-checks `Requirement -> Component -> Task -> File -> Evidence -> Release` in `docs/traceability-matrix.md`, blocks fake QA `PASS` claims, and rejects expired `EXC-*` exceptions.
+4. **Multi-Project Isolation & Independent SSDS Versioning:** Target-path nearest-project resolution (`ResolveNearestProjectRoot` + `--project <dir>` + `CheckNoSubprojectCrossing`) guarantees zero cross-project contamination when opening an umbrella workspace. Each project pins its own SHA-256-signed `ssds_version` (`sen sdlc version --changelog | --check | --upgrade | --rollback`), so releasing `SSDS v1.1` / `v2.0` never silently alters active `v1.0.0` projects.
+5. **Bounded Repair (`<= 3` Rounds), Safe `--express` Brakes & Raw Media Guard:** Preserves `SMALL`/`MEDIUM`/`LARGE` sizing, `--express` autonomous execution (with `WF_CRITICAL`, deletion, and critical-path `force_ask` brakes), `[QUARANTINE 3/3]` loop protection, `ffprobe` media stream verification, and 1-command Companion/Pack management.
 
 ---
 
 ## Zero-Build Installation (No Go Toolchain Required!)
 
 ### Option 1 — Native Antigravity Plugin (Zero-Build)
-Clone directly into your workspace `.agents/plugins/` folder:
 ```bash
 git clone https://github.com/developerfs0110/Sen-VN.git .agents/plugins/sen-vn
 ```
-Antigravity discovers `plugin.json`, `hooks.json`, `rules/AGENTS.md`, `skills/sen-setup/SKILL.md`, `skills/sen-dialectical/SKILL.md`, and `skills/sen-skill-capture/SKILL.md`. On first run, `./bin/sen` (`bin/sen.cmd` on Windows, `bin/sen` on macOS/Linux) downloads and SHA-256-verifies the prebuilt GitHub Release binary into `$PLUGIN_DATA/bin` (falling back to a one-time `go build` if offline with Go installed), then executes in `<2ms` on every subsequent call.
 
-### Option 2 — 1-Command CLI + Workspace Companion Install (No Go Required)
+### Option 2 — 1-Command CLI + Global Antigravity Hooks (`~/.gemini/config/hooks.json`)
 **Windows PowerShell (No Admin / SmartScreen-Safe):**
 ```powershell
 irm https://raw.githubusercontent.com/developerfs0110/Sen-VN/main/scripts/install-sen.ps1 | iex
-# Initialize a workspace with default companions + optional packs, or update safely:
+# Optional: skip global ~/.gemini/config/hooks.json merge or initialize a workspace with packs:
+powershell -ExecutionPolicy Bypass -File .\scripts\install-sen.ps1 -ConfigureHooks:$false
 powershell -ExecutionPolicy Bypass -File .\scripts\install-sen.ps1 -Workspace . -Packs media-video,workflow-diagram
-powershell -ExecutionPolicy Bypass -File .\scripts\install-sen.ps1 -Workspace . -Update
 ```
 
 **macOS / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/developerfs0110/Sen-VN/main/scripts/install-sen.sh | sh
-./scripts/install-sen.sh --workspace . --packs media-video,workflow-diagram
-./scripts/install-sen.sh --workspace . --update
+./scripts/install-sen.sh --no-hooks --workspace . --packs media-video,workflow-diagram
 ```
 
-### Option 3 — Build from Source (Go Developers, Go 1.26+)
+### Option 3 — Build from Source (Go 1.26+)
 ```bash
-go install github.com/developerfs0110/Sen-VN/cmd/sen@latest
-# or from repo root:
 go build -trimpath -ldflags="-s -w" -o sen.exe ./cmd/sen
 ```
 
 ---
 
-## Frozen 8-Command CLI Surface
+## 9-Command CLI Surface (`sen [--project <dir>] <cmd>`)
 
 | # | Command | Purpose |
 |---|---|---|
-| 1 | `sen init [--install-companions] [--packs <list\|all\|csv>] [--profile <auto\|code\|web\|video\|media\|docs>] [--express] [--update]` | Creates `.sen/state.db` (5 WAL tables), signed `.sen/config.json` (`.sen/config.sha256`), `AGENTS.md`, `.agents/hooks.json`, installs companions/optional packs (skipping existing, with fork fallback), or runs safe `.bak`-backed updates (`--update`). |
-| 2 | `sen brief [--path <file>] [--hook [event]]` | Prints a `<250 token` startup brief (`profile`, `express`, Companion Skills, `QUARANTINE` / interrupted `OPEN` task warning, active rules, pending `R_i`) or runs the Antigravity JSON hook adapter. |
-| 3 | `sen intake` | Records user intent (`--quote "<raw>" --req "<summary>" [--bugfix] [--security] [--vn-law] [--express]`) or manages project rules (`--rule "<text>" [--glob "*"] [--replace <id>] [--delete <id>]`, capped at `<= 20`). |
-| 4 | `sen begin <task_id>` | Opens an immutable scoped task (`--reqs R1,R2 --files f1,f2 [--kind feature\|bugfix\|ui] [--allow-delete] [--express]`), sizes risk (`SMALL` / `MEDIUM` / `LARGE`), locks pre-existing tests & raw media (`is_locked_test = 1`), and snapshots scope files `<= 10MB`. |
-| 5 | `sen verify <task_id> -- <bin> [args...]` | Enforces `<= 3` consecutive failed attempts (`[QUARANTINE 3/3]`), checks scope & locked-asset integrity, executes `<bin>` directly (`go`, `pytest`, `vitest`, `ffprobe`, etc.) with scrubbed env, rejects empty tests / corrupt 0-stream media, advances `__BASELINE__` on pass, and appends hash-chained `evidence`. |
-| 6 | `sen undo [task_id]` | Restores an `OPEN` task's modified/deleted scope files byte-for-byte from `.sen/snapshots/<task_id>/`, removes newly created scope files, clears quarantine state, and marks the task `UNDONE`. |
-| 7 | `sen done [-- <suite_bin> <args...>]` | Verifies the SHA-256 evidence chain from `GENESIS`, workspace/raw-media integrity, domain-appropriate live suite pass, and 100% SQL coverage (`R_i -> VERIFIED Task -> TEST/MEDIA/BUILD/RUN`). Writes enhanced `.sen/delivery-report.md`. |
-| 8 | `sen status [--approve] [--express]` | Displays domain profile, express mode, rules (`N/20`), Companion Skills, requirements, tasks (including `[QUARANTINE 3/3]`), and evidence chain status; `--approve` approves pending requirements and unlocks quarantined `OPEN` tasks. |
+| 1 | `sen init [--install-companions] [--packs <list\|all\|csv>] [--profile <...>] [--express] [--update]` | Initializes `.sen/state.db` (8 WAL tables), signed `.sen/config.json` (preserving pinned `ssds_version` & `project_id`), `AGENTS.md`, `.agents/hooks.json`, and companions/packs. |
+| 2 | `sen brief [--path <file>] [--hook [event]]` | Emits `<250 token` startup brief (including `[SSDS v1.0.0 \| cat=... \| wf=... \| phase=... \| role=...]` & `ssds_notice`) or runs the 4-event Antigravity JSON hook adapter. |
+| 3 | `sen intake` | Captures verbatim user quotes (`R1..Rn`, `R_sec`, `R_law`), toggles `--express`, or manages `<= 20` persistent project rules. |
+| 4 | `sen begin <task_id>` | Opens a phase-checked scoped task (`--reqs ... --files ... [--phase P5] [--components C1,C2]`), enforces SSDS write firewall & subproject boundaries, locks tests/raw media, and snapshots files. |
+| 5 | `sen verify <task_id> -- <bin> [args...]` | Enforces `<= 3` repair attempts, runs direct binaries (`go`, `pytest`, `vitest`, `ffprobe`), updates SSDS §20 `exec_state` (`EXECUTED`/`TESTED`/`VERIFIED`) + `verdict`, and appends hash-chained `evidence`. |
+| 6 | `sen undo [task_id]` | Byte-for-byte rollback of an `OPEN` task from `.sen/snapshots/<task_id>/` and quarantine reset. |
+| 7 | `sen done [-- <suite_bin> <args...>]` | Verifies `evidence` & `ssds_governance` hash chains, active `EXC-*` expirations, `P1/P2` baseline hashes, `P1..P6` gate/approval completion, and 100% requirement coverage; writes `.sen/delivery-report.md`. |
+| 8 | `sen status [--approve] [--express]` | Displays profile, express mode, rules, requirements, tasks (`[QUARANTINE 3/3]`), and evidence chain; `--approve` unlocks quarantined tasks. |
+| 9 | `sen sdlc <subcommand>` | Full `SEN-STD-SDLC-001` engine: `classify`, `status [--report]`, `gate [P]`, `review`, `approve`, `impact`, `exception`, `sync`, and `version [--changelog \| --check \| --upgrade \| --rollback]`. |
 
 ---
 
-## Frozen 5-Table SQLite Schema (`.sen/state.db`, WAL Mode)
+## 8-Table SQLite Schema (`.sen/state.db`, WAL Mode)
 
 1. `rules` — Persistent user constraints (`COUNT(*) <= 20` hard cap).
-2. `requirements` — Verbatim user quotes mapped to `R1..Rn`, `R_sec`, and `R_law`.
-3. `tasks` — Immutable scoped work units with `req_ids_json`, `scope_files_json`, 3-tier `risk_auto` (`SMALL` / `MEDIUM` / `LARGE`), and `status` (`OPEN` / `VERIFIED` / `UNDONE`).
-4. `snapshots` — Git-independent `__BASELINE__` manifest (`>10MB` raw media tracks `size + mtime_ns` without copying) + per-task backups and locked test/raw-media markers (`is_locked_test = 1`).
-5. `evidence` — Tamper-evident canonical-JSON hash chain (`SHA256([seq, prev_hash, task_id, command, strength, tests_ran, exit_code, redacted_output])`) powering bounded repair quarantine (`<= 3` failed attempts) and 100% `sen done` coverage.
+2. `requirements` — Verbatim user quotes & typed SSDS requirements (`REQ-F/NF/BR/CON`, `R1..Rn`, `R_sec`, `R_law`).
+3. `tasks` — Scoped tasks with `phase_id`, `arch_components_json`, `risk_auto`, SSDS §20 `exec_state` (`IMPLEMENTED..VERIFIED`), and `verdict`.
+4. `snapshots` — Git-independent `__BASELINE__` manifest + per-task backups and locked test/raw-media markers.
+5. `evidence` — Tamper-evident SHA-256 hash chain of real subprocess verification outputs.
+6. `ssds_project` — Per-project UUIDv4, pinned `applied_ssds_version`, 7-category classification, workflow tier, and 8-dimension risk profile.
+7. `ssds_phases` — Lifecycle state (`P0..P9`), engineering roles, verified deliverable SHA-256 hashes, gate flags, and user approval quotes.
+8. `ssds_governance` — Tamper-evident SHA-256 hash chain of `REVIEW`, `DECISION`, `CHANGE_IMPACT` (`CIA-*`), and time-bounded `EXCEPTION` (`EXC-*`) records.

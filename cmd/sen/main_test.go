@@ -1,3 +1,4 @@
+// Tệp main_test.go kiểm thử bề mặt 9 lệnh CLI của Sen-VN v1.2.0, bảo toàn ssds_version và phát hiện sửa trộm config.json.
 package main
 
 import (
@@ -8,7 +9,8 @@ import (
 	"testing"
 )
 
-func TestCLIFrozenEightCommandsRejectsUnknown(t *testing.T) {
+// TestCLIFrozenNineCommandsRejectsUnknown xác minh bảng hướng dẫn liệt kê đủ 9 lệnh chuẩn và từ chối lệnh lạ.
+func TestCLIFrozenNineCommandsRejectsUnknown(t *testing.T) {
 	dir := t.TempDir()
 	var out, errBuf bytes.Buffer
 
@@ -16,16 +18,17 @@ func TestCLIFrozenEightCommandsRejectsUnknown(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("expected exit code 1 for unknown command, got %d", code)
 	}
-	for _, cmd := range []string{"init", "brief", "intake", "begin", "verify", "undo", "done", "status"} {
+	for _, cmd := range []string{"init", "brief", "intake", "begin", "verify", "undo", "done", "status", "sdlc"} {
 		if !strings.Contains(errBuf.String(), cmd) {
-			t.Errorf("expected usage output to list frozen command %q, got:\n%s", cmd, errBuf.String())
+			t.Errorf("expected usage output to list command %q, got:\n%s", cmd, errBuf.String())
 		}
 	}
 	if codeUpd := RunInDir(dir, []string{"update"}, strings.NewReader(""), &out, &errBuf); codeUpd != 1 {
-		t.Fatalf("expected top-level 'update' command to be rejected (8-command freeze), got %d", codeUpd)
+		t.Fatalf("expected top-level 'update' command to be rejected (9-command surface), got %d", codeUpd)
 	}
 }
 
+// TestCLIInitIntakeBeginStatusAndRuleCap kiểm tra luồng khởi tạo, tiếp nhận yêu cầu, mở task và phê duyệt qua CLI.
 func TestCLIInitIntakeBeginStatusAndRuleCap(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module demo\n\ngo 1.22\n"), 0o644)
@@ -62,7 +65,8 @@ func TestCLIInitIntakeBeginStatusAndRuleCap(t *testing.T) {
 	}
 }
 
-func TestCLIV11PacksListProfileExpressAndConfigTamper(t *testing.T) {
+// TestCLIV12PacksListProfileExpressAndConfigTamper kiểm tra danh mục gói, chế độ --express và chống xóa config.sha256.
+func TestCLIV12PacksListProfileExpressAndConfigTamper(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Pure Docs Project\n"), 0o644)
 
@@ -73,7 +77,6 @@ func TestCLIV11PacksListProfileExpressAndConfigTamper(t *testing.T) {
 	if !strings.Contains(out.String(), "superpowers") || !strings.Contains(out.String(), "media-video") {
 		t.Fatalf("unexpected packs catalog output:\n%s", out.String())
 	}
-	// --packs list must not initialize .sen/state.db prematurely.
 	if _, err := os.Stat(filepath.Join(dir, ".sen", "state.db")); !os.IsNotExist(err) {
 		t.Fatalf("expected --packs list not to create .sen/state.db")
 	}
@@ -93,7 +96,6 @@ func TestCLIV11PacksListProfileExpressAndConfigTamper(t *testing.T) {
 		t.Fatalf("expected Profile: docs | Express: on in status, got:\n%s", out.String())
 	}
 
-	// Removing .sen/config.sha256 must trigger tampering error on config load!
 	_ = os.Remove(filepath.Join(dir, ".sen", "config.sha256"))
 	out.Reset()
 	errBuf.Reset()

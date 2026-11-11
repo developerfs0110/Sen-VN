@@ -21,20 +21,18 @@ func TestOpenCreatesExactFiveTablesInWALMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UserTableNames failed: %v", err)
 	}
-	if len(tables) != 5 {
-		t.Fatalf("expected exact 5 SQLite tables, got %d: %v", len(tables), tables)
+	wantExact := []string{
+		"evidence",
+		"requirements",
+		"rules",
+		"snapshots",
+		"ssds_governance",
+		"ssds_phases",
+		"ssds_project",
+		"tasks",
 	}
-	want := map[string]bool{
-		"rules":        true,
-		"requirements": true,
-		"tasks":        true,
-		"snapshots":    true,
-		"evidence":     true,
-	}
-	for _, name := range tables {
-		if !want[name] {
-			t.Errorf("unexpected table %q", name)
-		}
+	if strings.Join(tables, ",") != strings.Join(wantExact, ",") {
+		t.Fatalf("expected exact 8 SQLite tables %v, got %v", wantExact, tables)
 	}
 }
 
@@ -237,4 +235,3 @@ func TestCountConsecutiveFailedEvidence(t *testing.T) {
 		t.Fatalf("expected 1 failed evidence row after seq %d, got %d (err=%v)", ev3.Seq, gotAfter, err)
 	}
 }
-

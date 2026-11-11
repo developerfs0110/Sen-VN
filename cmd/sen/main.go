@@ -1,4 +1,4 @@
-// Package main cung cấp điểm vào CLI của Sen-VN v1.1.0 với đúng 8 lệnh cố định (Scope Freeze).
+// Package main cung cấp điểm vào CLI của Sen-VN v1.2.0 với đúng 9 lệnh cố định (bao gồm động cơ SSDS v1.0.0).
 package main
 
 import (
@@ -17,9 +17,11 @@ import (
 	"github.com/developerfs0110/Sen-VN/internal/workspace"
 )
 
-// Config lưu trữ cấu hình kiểm chứng, chế độ tự hành và chuyên ngành tại .sen/config.json của từng workspace.
+// Config lưu trữ cấu hình kiểm chứng, phiên bản SSDS đã ghim, định danh dự án, chế độ tự hành và chuyên ngành tại .sen/config.json.
 type Config struct {
 	Version          string   `json:"version"`
+	SSDSVersion      string   `json:"ssds_version,omitempty"`
+	ProjectID        string   `json:"project_id,omitempty"`
 	AllowedBinaries  []string `json:"allowed_binaries"`
 	ProjectVerifyCmd []string `json:"project_verify_cmd"`
 	TimeoutSeconds   int      `json:"timeout_seconds"`
@@ -37,49 +39,57 @@ func main() {
 	os.Exit(RunInDir(cwd, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
-// printUsage in bảng hướng dẫn sử dụng đúng 8 lệnh cốt lõi của Sen-VN v1.1.0.
+// printUsage in bảng hướng dẫn sử dụng đúng 9 lệnh cốt lõi của Sen-VN v1.2.0 + SSDS v1.0.0.
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, `Sen-VN v1.1.0 — Deterministic AI Coding Referee (8 Commands)
+	fmt.Fprintln(w, `Sen-VN v1.2.0 — Deterministic AI Coding & SSDS Referee (9 Commands)
 
 Usage:
-  sen init [--with-companions] [--install-companions] [--packs <list|all|csv>] [--profile <auto|code|web|video|media|docs>] [--express] [--agy-hooks] [--update]
-  sen brief [--path <file>] [--hook [event]]
-  sen intake --quote "<raw>" --req "<summary>" [--bugfix] [--security] [--vn-law] [--express]
-  sen intake --rule "<text>" [--quote "<raw>"] [--glob "*"] [--replace <id>] [--delete <id>]
-  sen begin <task_id> --reqs R1,R2 --files f1,f2 [--kind feature|bugfix|ui] [--allow-delete] [--express] [--title "..."]
-  sen verify <task_id> -- <bin> [args...]
-  sen undo [task_id]
-  sen done [-- <suite_bin> <args...>]
-  sen status [--approve] [--express]`)
+  sen [--project <dir>] init [--with-companions] [--install-companions] [--packs <list|all|csv>] [--profile <auto|code|web|video|media|docs>] [--express] [--agy-hooks] [--update]
+  sen [--project <dir>] brief [--path <file>] [--hook [event]]
+  sen [--project <dir>] intake --quote "<raw>" --req "<summary>" [--bugfix] [--security] [--vn-law] [--express]
+  sen [--project <dir>] intake --rule "<text>" [--quote "<raw>"] [--glob "*"] [--replace <id>] [--delete <id>]
+  sen [--project <dir>] begin <task_id> --reqs R1,R2 --files f1,f2 [--phase P5] [--components C1,C2] [--kind feature|bugfix|ui] [--allow-delete] [--express] [--title "..."]
+  sen [--project <dir>] verify <task_id> -- <bin> [args...]
+  sen [--project <dir>] undo [task_id]
+  sen [--project <dir>] done [-- <suite_bin> <args...>]
+  sen [--project <dir>] status [--approve] [--express]
+  sen [--project <dir>] sdlc <classify|status|gate|review|approve|impact|exception|sync|version> [flags]`)
 }
 
-// RunInDir điều phối và thực thi một trong 8 lệnh CLI cấp cao nhất của Sen-VN; từ chối mọi lệnh lạ.
+// RunInDir điều phối và thực thi một trong 9 lệnh CLI cấp cao nhất của Sen-VN (hỗ trợ cờ --project cô lập đa dự án).
 func RunInDir(cwd string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
+	effCwd, remArgs, flagErr := consumeLeadingProjectFlag(cwd, args)
+	if flagErr != nil {
+		fmt.Fprintf(stderr, "sen error: %v\n", flagErr)
+		return 1
+	}
+	if len(remArgs) == 0 {
 		printUsage(stderr)
 		return 1
 	}
-	cmd := strings.TrimSpace(args[0])
-	rest := args[1:]
+	cmd := strings.TrimSpace(remArgs[0])
+	rest := remArgs[1:]
 
 	var err error
 	switch cmd {
 	case "init":
-		err = cmdInit(cwd, rest, stdout)
+		err = cmdInit(effCwd, rest, stdout)
 	case "brief":
-		err = cmdBrief(cwd, rest, stdin, stdout)
+		err = cmdBrief(effCwd, rest, stdin, stdout)
 	case "intake":
-		err = cmdIntake(cwd, rest, stdout)
+		err = cmdIntake(effCwd, rest, stdout)
 	case "begin":
-		err = cmdBegin(cwd, rest, stdout)
+		err = cmdBegin(effCwd, rest, stdout)
 	case "verify":
-		err = cmdVerify(cwd, rest, stdout)
+		err = cmdVerify(effCwd, rest, stdout)
 	case "undo":
-		err = cmdUndo(cwd, rest, stdout)
+		err = cmdUndo(effCwd, rest, stdout)
 	case "done":
-		err = cmdDone(cwd, rest, stdout)
+		err = cmdDone(effCwd, rest, stdout)
 	case "status":
-		err = cmdStatus(cwd, rest, stdout)
+		err = cmdStatus(effCwd, rest, stdout)
+	case "sdlc":
+		err = cmdSDLC(effCwd, rest, stdout)
 	default:
 		fmt.Fprintf(stderr, "sen: unknown command %q\n\n", cmd)
 		printUsage(stderr)
@@ -93,13 +103,46 @@ func RunInDir(cwd string, args []string, stdin io.Reader, stdout, stderr io.Writ
 	return 0
 }
 
-// resolveProjectRoot xác định thư mục gốc của dự án (kể cả khi hook chạy từ bên trong .agents).
-func resolveProjectRoot(cwd string) string {
-	if fileExists(filepath.Join(cwd, ".sen", "state.db")) {
-		return cwd
+// consumeLeadingProjectFlag trích xuất cờ tùy chọn --project <dir> đứng trước tên lệnh con để chỉ định đúng dự án đích.
+func consumeLeadingProjectFlag(cwd string, args []string) (string, []string, error) {
+	effCwd := cwd
+	for len(args) > 0 {
+		tok := strings.TrimSpace(args[0])
+		if tok == "--project" || tok == "-project" {
+			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+				return "", nil, fmt.Errorf("--project requires a non-empty directory path")
+			}
+			target := strings.TrimSpace(args[1])
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(effCwd, target)
+			}
+			effCwd = filepath.Clean(target)
+			args = args[2:]
+			continue
+		}
+		if strings.HasPrefix(tok, "--project=") || strings.HasPrefix(tok, "-project=") {
+			idx := strings.IndexByte(tok, '=')
+			target := strings.TrimSpace(tok[idx+1:])
+			if target == "" {
+				return "", nil, fmt.Errorf("--project requires a non-empty directory path")
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(effCwd, target)
+			}
+			effCwd = filepath.Clean(target)
+			args = args[1:]
+			continue
+		}
+		break
 	}
-	if strings.EqualFold(filepath.Base(cwd), ".agents") {
-		return filepath.Dir(cwd)
+	return effCwd, args, nil
+}
+
+// resolveProjectRoot định vị ranh giới gốc của dự án gần nhất mà không để rò rỉ sang Workspace mẹ bên ngoài.
+func resolveProjectRoot(cwd string) string {
+	projRoot, _ := workspace.ResolveNearestProjectRoot("", cwd)
+	if strings.TrimSpace(projRoot) != "" {
+		return projRoot
 	}
 	return cwd
 }
@@ -108,7 +151,7 @@ func resolveProjectRoot(cwd string) string {
 func openExistingStore(root string) (*storage.Store, error) {
 	dbPath := filepath.Join(root, ".sen", "state.db")
 	if !fileExists(dbPath) {
-		return nil, fmt.Errorf("workspace not initialized (.sen/state.db missing); run `sen init` first")
+		return nil, fmt.Errorf("workspace not initialized (.sen/state.db missing); run `sen init` or `sen sdlc classify` first")
 	}
 	return storage.Open(dbPath)
 }
@@ -117,16 +160,21 @@ func openExistingStore(root string) (*storage.Store, error) {
 func loadConfig(root string) (Config, error) {
 	resolvedDefault := workspace.ResolveDomainProfile(root, "auto")
 	cfg := Config{
-		Version:          "1.1",
+		Version:          "1.2",
 		AllowedBinaries:  verify.DefaultAllowedBinaries(),
 		ProjectVerifyCmd: detectDefaultVerifyCmd(root, resolvedDefault),
 		TimeoutSeconds:   120,
 		DomainProfile:    "auto",
 	}
 	cfgPath := filepath.Join(root, ".sen", "config.json")
-	raw, err := os.ReadFile(cfgPath)
-	if err == nil && len(raw) > 0 {
-		sumPath := filepath.Join(root, ".sen", "config.sha256")
+	sumPath := filepath.Join(root, ".sen", "config.sha256")
+	hasCfg := fileExists(cfgPath)
+	hasSum := fileExists(sumPath)
+	if hasCfg || hasSum {
+		raw, err := os.ReadFile(cfgPath)
+		if err != nil || len(raw) == 0 {
+			return cfg, fmt.Errorf(".sen/config.json missing or empty while signature exists (tampering detected)")
+		}
 		expectedBytes, sErr := os.ReadFile(sumPath)
 		if sErr != nil || strings.TrimSpace(string(expectedBytes)) != sha256Hex(raw) {
 			return cfg, fmt.Errorf(".sen/config.json integrity hash mismatch (tampering detected)")
@@ -134,6 +182,9 @@ func loadConfig(root string) (Config, error) {
 		cfg.ProjectVerifyCmd = nil
 		if jErr := json.Unmarshal(raw, &cfg); jErr != nil {
 			return cfg, fmt.Errorf("invalid .sen/config.json: %w", jErr)
+		}
+		if len(cfg.ProjectVerifyCmd) == 0 {
+			cfg.ProjectVerifyCmd = detectDefaultVerifyCmd(root, workspace.ResolveDomainProfile(root, cfg.DomainProfile))
 		}
 	}
 	if len(cfg.AllowedBinaries) == 0 {

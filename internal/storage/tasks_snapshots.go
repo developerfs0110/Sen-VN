@@ -1,4 +1,4 @@
-// Tệp tasks_snapshots.go quản lý vòng đời task bất biến và bảng đối chiếu ảnh chụp tệp tin (snapshots).
+// Tệp tasks_snapshots.go quản lý vòng đời task bất biến (4 trạng thái thực thi SSDS §20) và bảng ảnh chụp tệp tin (snapshots).
 package storage
 
 import (
@@ -9,17 +9,21 @@ import (
 	"strings"
 )
 
-// Task biểu diễn một đơn vị công việc gắn chặt với danh sách R_i và phạm vi tệp được phép chỉnh sửa.
+// Task biểu diễn đơn vị công việc gắn với pha SDLC, danh sách yêu cầu, thành phần kiến trúc và trạng thái bằng chứng SSDS §20.
 type Task struct {
-	ID         string
-	ReqIDs     []string
-	Title      string
-	Kind       string
-	RiskAuto   string
-	ScopeFiles []string
-	Status     string
-	CreatedAt  string
-	UpdatedAt  string
+	ID             string
+	PhaseID        string
+	ReqIDs         []string
+	ArchComponents []string
+	Title          string
+	Kind           string
+	RiskAuto       string
+	ScopeFiles     []string
+	Status         string
+	ExecState      string
+	Verdict        string
+	CreatedAt      string
+	UpdatedAt      string
 }
 
 // Snapshot lưu siêu dữ liệu nguyên bản (SHA-256, kích thước, mtime) và đường dẫn sao lưu cho một tệp tin.
@@ -45,7 +49,29 @@ func (s *Store) CreateTask(t Task) error {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+
+	phaseID := strings.TrimSpace(t.PhaseID)
+	if phaseID == "" {
+		phaseID = "P5"
+	}
+	archComps := t.ArchComponents
+	if archComps == nil {
+		archComps = []string{}
+	}
+	execState, err := normalizeTaskExecState(t.ExecState, t.Status)
+	if err != nil {
+		return err
+	}
+	verdict, err := normalizeTaskVerdict(t.Verdict, t.Status)
+	if err != nil {
+		return err
+	}
+
 	reqJSON, err := json.Marshal(t.ReqIDs)
+	if err != nil {
+		return err
+	}
+	compJSON, err := json.Marshal(archComps)
 	if err != nil {
 		return err
 	}
@@ -59,9 +85,11 @@ func (s *Store) CreateTask(t Task) error {
 		created = ts
 	}
 	_, err = s.db.Exec(`
-		INSERT INTO tasks (id, req_ids_json, title, kind, risk_auto, scope_files_json, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, t.ID, string(reqJSON), t.Title, t.Kind, t.RiskAuto, string(filesJSON), t.Status, created, ts)
+		INSERT INTO tasks (
+			id, phase_id, req_ids_json, arch_components_json, title, kind, risk_auto,
+			scope_files_json, status, exec_state, verdict, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, t.ID, phaseID, string(reqJSON), string(compJSON), t.Title, t.Kind, t.RiskAuto, string(filesJSON), t.Status, execState, verdict, created, ts)
 	return err
 }
 
@@ -70,14 +98,18 @@ func (s *Store) SaveTask(t Task) error {
 	return s.CreateTask(t)
 }
 
-// GetTask truy vấn thông tin chi tiết của một task theo ID kèm giải mã JSON cho req_ids và scope_files.
+// GetTask truy vấn thông tin chi tiết của một task theo ID kèm giải mã JSON cho req_ids, arch_components và scope_files.
 func (s *Store) GetTask(id string) (*Task, error) {
 	var t Task
-	var reqJSON, filesJSON string
+	var reqJSON, compJSON, filesJSON string
 	err := s.db.QueryRow(`
-		SELECT id, req_ids_json, title, kind, risk_auto, scope_files_json, status, created_at, updated_at
+		SELECT id, phase_id, req_ids_json, arch_components_json, title, kind, risk_auto,
+		       scope_files_json, status, exec_state, verdict, created_at, updated_at
 		FROM tasks WHERE id = ?
-	`, id).Scan(&t.ID, &reqJSON, &t.Title, &t.Kind, &t.RiskAuto, &filesJSON, &t.Status, &t.CreatedAt, &t.UpdatedAt)
+	`, id).Scan(
+		&t.ID, &t.PhaseID, &reqJSON, &compJSON, &t.Title, &t.Kind, &t.RiskAuto,
+		&filesJSON, &t.Status, &t.ExecState, &t.Verdict, &t.CreatedAt, &t.UpdatedAt,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("task %q not found", id)
 	}
@@ -85,6 +117,7 @@ func (s *Store) GetTask(id string) (*Task, error) {
 		return nil, err
 	}
 	_ = json.Unmarshal([]byte(reqJSON), &t.ReqIDs)
+	_ = json.Unmarshal([]byte(compJSON), &t.ArchComponents)
 	_ = json.Unmarshal([]byte(filesJSON), &t.ScopeFiles)
 	return &t, nil
 }
@@ -92,7 +125,8 @@ func (s *Store) GetTask(id string) (*Task, error) {
 // ListTasks liệt kê toàn bộ các task theo thứ tự khởi tạo trong sổ cái.
 func (s *Store) ListTasks() ([]Task, error) {
 	rows, err := s.db.Query(`
-		SELECT id, req_ids_json, title, kind, risk_auto, scope_files_json, status, created_at, updated_at
+		SELECT id, phase_id, req_ids_json, arch_components_json, title, kind, risk_auto,
+		       scope_files_json, status, exec_state, verdict, created_at, updated_at
 		FROM tasks ORDER BY rowid ASC
 	`)
 	if err != nil {
@@ -102,20 +136,31 @@ func (s *Store) ListTasks() ([]Task, error) {
 	var out []Task
 	for rows.Next() {
 		var t Task
-		var reqJSON, filesJSON string
-		if err := rows.Scan(&t.ID, &reqJSON, &t.Title, &t.Kind, &t.RiskAuto, &filesJSON, &t.Status, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		var reqJSON, compJSON, filesJSON string
+		if err := rows.Scan(
+			&t.ID, &t.PhaseID, &reqJSON, &compJSON, &t.Title, &t.Kind, &t.RiskAuto,
+			&filesJSON, &t.Status, &t.ExecState, &t.Verdict, &t.CreatedAt, &t.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(reqJSON), &t.ReqIDs)
+		_ = json.Unmarshal([]byte(compJSON), &t.ArchComponents)
 		_ = json.Unmarshal([]byte(filesJSON), &t.ScopeFiles)
 		out = append(out, t)
 	}
 	return out, rows.Err()
 }
 
-// UpdateTaskStatus cập nhật trạng thái của task (ví dụ OPEN -> VERIFIED hoặc UNDONE).
+// UpdateTaskStatus cập nhật trạng thái của task (ví dụ OPEN -> VERIFIED hoặc UNDONE) và đồng bộ mặc định exec_state/verdict.
 func (s *Store) UpdateTaskStatus(id, status string) error {
-	res, err := s.db.Exec(`UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`, status, nowUTC(), id)
+	res, err := s.db.Exec(`
+		UPDATE tasks SET
+			status = ?,
+			exec_state = CASE WHEN ? = 'VERIFIED' AND exec_state = 'IMPLEMENTED' THEN 'VERIFIED' ELSE exec_state END,
+			verdict = CASE WHEN ? = 'VERIFIED' AND verdict = 'NOT_EXECUTED' THEN 'PASS' ELSE verdict END,
+			updated_at = ?
+		WHERE id = ?
+	`, status, status, status, nowUTC(), id)
 	if err != nil {
 		return err
 	}
@@ -123,6 +168,68 @@ func (s *Store) UpdateTaskStatus(id, status string) error {
 		return fmt.Errorf("task %q not found", id)
 	}
 	return nil
+}
+
+// UpdateTaskExecutionState cập nhật chi tiết 4 trạng thái thực thi (IMPLEMENTED..VERIFIED) và 6 nhãn kết luận SSDS §20 của task.
+func (s *Store) UpdateTaskExecutionState(id, execState, verdict, taskStatus string) error {
+	normExec, err := normalizeTaskExecState(execState, "")
+	if err != nil {
+		return err
+	}
+	normVerdict, err := normalizeTaskVerdict(verdict, "")
+	if err != nil {
+		return err
+	}
+	cleanStatus := strings.TrimSpace(taskStatus)
+	res, err := s.db.Exec(`
+		UPDATE tasks SET
+			exec_state = ?,
+			verdict = ?,
+			status = CASE WHEN ? != '' THEN ? ELSE status END,
+			updated_at = ?
+		WHERE id = ?
+	`, normExec, normVerdict, cleanStatus, cleanStatus, nowUTC(), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("task %q not found", id)
+	}
+	return nil
+}
+
+// normalizeTaskExecState kiểm tra và chuẩn hóa trạng thái thực thi thuộc tập IMPLEMENTED, EXECUTED, TESTED, VERIFIED, BLOCKED.
+func normalizeTaskExecState(raw, fallbackStatus string) (string, error) {
+	v := strings.ToUpper(strings.TrimSpace(raw))
+	if v == "" {
+		if strings.EqualFold(strings.TrimSpace(fallbackStatus), "VERIFIED") {
+			return "VERIFIED", nil
+		}
+		return "IMPLEMENTED", nil
+	}
+	switch v {
+	case "IMPLEMENTED", "EXECUTED", "TESTED", "VERIFIED", "BLOCKED":
+		return v, nil
+	default:
+		return "", fmt.Errorf("invalid task exec_state %q: must be IMPLEMENTED, EXECUTED, TESTED, VERIFIED, or BLOCKED", raw)
+	}
+}
+
+// normalizeTaskVerdict chuẩn hóa nhãn kết luận SSDS §20 thuộc tập PASS, FAIL, NOT_EXECUTED, NOT_VERIFIED, BLOCKED, NOT_APPLICABLE.
+func normalizeTaskVerdict(raw, fallbackStatus string) (string, error) {
+	v := strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(raw)), " ", "_")
+	if v == "" {
+		if strings.EqualFold(strings.TrimSpace(fallbackStatus), "VERIFIED") {
+			return "PASS", nil
+		}
+		return "NOT_EXECUTED", nil
+	}
+	switch v {
+	case "PASS", "FAIL", "NOT_EXECUTED", "NOT_VERIFIED", "BLOCKED", "NOT_APPLICABLE":
+		return v, nil
+	default:
+		return "", fmt.Errorf("invalid task verdict %q: must be PASS, FAIL, NOT_EXECUTED, NOT_VERIFIED, BLOCKED, or NOT_APPLICABLE", raw)
+	}
 }
 
 // ReplaceSnapshots ghi thay thế nguyên tử toàn bộ danh sách snapshot của một task_id (hoặc __BASELINE__).

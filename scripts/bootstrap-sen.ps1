@@ -18,7 +18,8 @@ $ProgressPreference = "SilentlyContinue"
 # Ưu tiên lưu tệp nhị phân vào thư mục dữ liệu bền vững của plugin ($env:PLUGIN_DATA) hoặc .cache\bin.
 $cacheDir = if (-not [string]::IsNullOrWhiteSpace($env:PLUGIN_DATA)) {
     Join-Path $env:PLUGIN_DATA "bin"
-} else {
+}
+else {
     Join-Path $RepoRoot ".cache\bin"
 }
 if (-not (Test-Path -LiteralPath $cacheDir)) {
@@ -72,9 +73,11 @@ try {
     Move-Item -LiteralPath $tmpBin -Destination $targetExe -Force
     Unblock-File -LiteralPath $targetExe -ErrorAction SilentlyContinue
     $downloaded = $true
-} catch {
+}
+catch {
     [Console]::Error.WriteLine("[sen bootstrap] Release download skipped ($($_.Exception.Message)); trying local Go build...")
-} finally {
+}
+finally {
     if (Test-Path -LiteralPath $tmpSum) { Remove-Item -LiteralPath $tmpSum -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $tmpBin) { Remove-Item -LiteralPath $tmpBin -Force -ErrorAction SilentlyContinue }
 }
@@ -88,7 +91,8 @@ $goExe = $null
 $goCmd = Get-Command go -ErrorAction SilentlyContinue
 if ($null -ne $goCmd) {
     $goExe = $goCmd.Source
-} elseif (Test-Path -LiteralPath "C:\Program Files\Go\bin\go.exe") {
+}
+elseif (Test-Path -LiteralPath "C:\Program Files\Go\bin\go.exe") {
     $goExe = "C:\Program Files\Go\bin\go.exe"
 }
 
@@ -108,6 +112,7 @@ try {
         throw "go build exited with code $LASTEXITCODE"
     }
     Unblock-File -LiteralPath $targetExe -ErrorAction SilentlyContinue
-} finally {
+}
+finally {
     Pop-Location
 }

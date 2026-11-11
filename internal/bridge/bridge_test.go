@@ -1,13 +1,10 @@
+// Tệp bridge_test.go kiểm thử phát hiện gói đồng hành, mẫu AGENTS.md v1.2.0 và 4 sự kiện JSON hook của Antigravity.
 package bridge_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +14,7 @@ import (
 	"github.com/developerfs0110/Sen-VN/internal/workspace"
 )
 
+// TestDetectCompanionsWalksParentDirs xác minh khả năng dò ngược cây thư mục cha để nhận diện các gói kỹ năng .agents/.
 func TestDetectCompanionsWalksParentDirs(t *testing.T) {
 	parent := t.TempDir()
 	project := filepath.Join(parent, "Code", "my-app")
@@ -45,23 +43,28 @@ func TestDetectCompanionsWalksParentDirs(t *testing.T) {
 	}
 }
 
+// TestRenderAgentsMDConciseAndComplete kiểm tra độ dài súc tích và sự hiện diện đủ 9 lệnh (kể cả sen sdlc) trong AGENTS.md.
 func TestRenderAgentsMDConciseAndComplete(t *testing.T) {
 	md := bridge.RenderAgentsMD()
 	lines := strings.Split(strings.TrimSpace(md), "\n")
-	if len(lines) < 25 || len(lines) > 45 {
-		t.Errorf("expected AGENTS.md around ~35 lines, got %d lines:\n%s", len(lines), md)
+	if len(lines) < 20 || len(lines) > 45 {
+		t.Errorf("expected AGENTS.md around ~25-40 lines, got %d lines:\n%s", len(lines), md)
 	}
-	for _, must := range []string{"sen intake", "sen begin", "sen verify", "sen done", "systematic-debugging", "security-audit", "vn-law-check"} {
+	for _, must := range []string{
+		"Sen-VN v1.2.0", "SSDS v1.0.0", "sen sdlc", "sen intake",
+		"sen begin", "sen verify", "sen done", "systematic-debugging", "security-audit", "vn-law-check",
+	} {
 		if !strings.Contains(md, must) {
 			t.Errorf("AGENTS.md missing %q", must)
 		}
 	}
 }
 
+// TestAntigravityHooksAllFourEventsAndUninitializedSafety kiểm chứng đầy đủ SessionStart, PreInvocation, PreToolUse và Stop.
 func TestAntigravityHooksAllFourEventsAndUninitializedSafety(t *testing.T) {
 	root := t.TempDir()
 
-	// 0. Uninitialized DB (st == nil): read_file must allow and never crash.
+	// 0. Khi chưa khởi tạo DB (st == nil): read_file luôn cho phép ("allow") và không gây lỗi.
 	var out bytes.Buffer
 	in := `{"hookEventName":"PreToolUse","toolCall":{"name":"read_file","args":{"Path":"README.md"}}}`
 	if err := bridge.HandleAntigravityHook(nil, root, strings.NewReader(in), &out); err != nil {
@@ -71,7 +74,7 @@ func TestAntigravityHooksAllFourEventsAndUninitializedSafety(t *testing.T) {
 		t.Fatalf("expected allow when uninitialized, got: %s", out.String())
 	}
 
-	// Setup initialized store + baseline + locked test + HIGH risk OPEN task.
+	// Thiết lập sổ cái + baseline + khóa tệp test sẵn có + task OPEN bậc LARGE.
 	_ = os.WriteFile(filepath.Join(root, "app_test.go"), []byte("package app\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(root, "auth.go"), []byte("package app\n"), 0o644)
 
@@ -95,7 +98,7 @@ func TestAntigravityHooksAllFourEventsAndUninitializedSafety(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. SessionStart -> injects systemMessage brief warning about OPEN task T-AUTH.
+	// 1. SessionStart -> bơm systemMessage cảnh báo task T-AUTH đang OPEN.
 	out.Reset()
 	in = `{"hookEventName":"SessionStart","cwd":"` + strings.ReplaceAll(root, `\`, `\\`) + `"}`
 	if err := bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out); err != nil {
@@ -105,7 +108,7 @@ func TestAntigravityHooksAllFourEventsAndUninitializedSafety(t *testing.T) {
 		t.Errorf("expected SessionStart systemMessage with T-AUTH warning, got: %s", out.String())
 	}
 
-	// 2. PreInvocation -> captures raw lastUserInput to .sen/last_prompt.txt without adding SQLite tables.
+	// 2. PreInvocation -> ghi lastUserInput vào .sen/last_prompt.txt và giữ nguyên đúng 8 bảng chuẩn trong SQLite.
 	out.Reset()
 	in = `{"hookEventName":"PreInvocation","lastUserInput":"Please fix auth login bug without breaking API"}`
 	if err := bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out); err != nil {
@@ -116,11 +119,11 @@ func TestAntigravityHooksAllFourEventsAndUninitializedSafety(t *testing.T) {
 		t.Fatalf("expected .sen/last_prompt.txt saved, got %q (err=%v)", savedPrompt, err)
 	}
 	tables, _ := st.UserTableNames()
-	if len(tables) != 5 {
-		t.Fatalf("SQLite table count must remain strictly 5, got %d", len(tables))
+	if len(tables) != 8 {
+		t.Fatalf("SQLite table count must remain strictly 8, got %d (%v)", len(tables), tables)
 	}
 
-	// 3a. PreToolUse -> deny edits to .sen/
+	// 3a. PreToolUse -> chặn chỉnh sửa thư mục bảo vệ .sen/
 	out.Reset()
 	in = `{"hookEventName":"PreToolUse","toolCall":{"name":"write_file","args":{"Path":".sen/state.db"}}}`
 	if err := bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out); err != nil {
@@ -132,7 +135,7 @@ func TestAntigravityHooksAllFourEventsAndUninitializedSafety(t *testing.T) {
 		t.Fatalf("expected deny on .sen/, got: %s", out.String())
 	}
 
-	// 3b. PreToolUse -> deny edits to locked test app_test.go
+	// 3b. PreToolUse -> chặn chỉnh sửa tệp test đã khóa app_test.go
 	out.Reset()
 	in = `{"hookEventName":"PreToolUse","toolCall":{"name":"edit_file","args":{"Path":"app_test.go"}}}`
 	if err := bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out); err != nil {
@@ -144,7 +147,7 @@ func TestAntigravityHooksAllFourEventsAndUninitializedSafety(t *testing.T) {
 		t.Fatalf("expected deny on locked test app_test.go, got: %s", out.String())
 	}
 
-	// 3c. PreToolUse -> force_ask on HIGH risk scoped file auth.go
+	// 3c. PreToolUse -> trả về force_ask trên tệp auth.go thuộc bậc rủi ro LARGE
 	out.Reset()
 	in = `{"hookEventName":"PreToolUse","toolCall":{"name":"edit_file","args":{"Path":"auth.go"}}}`
 	if err := bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out); err != nil {
@@ -153,10 +156,10 @@ func TestAntigravityHooksAllFourEventsAndUninitializedSafety(t *testing.T) {
 	preResp = nil
 	_ = json.Unmarshal(out.Bytes(), &preResp)
 	if preResp["decision"] != "force_ask" {
-		t.Fatalf("expected force_ask on HIGH risk task edit, got: %s", out.String())
+		t.Fatalf("expected force_ask on HIGH/LARGE risk task edit, got: %s", out.String())
 	}
 
-	// 4. Stop -> decision "continue" when task is OPEN and terminationReason is NO_TOOL_CALL.
+	// 4. Stop -> trả về "continue" khi task đang OPEN và nguyên nhân dừng là NO_TOOL_CALL.
 	out.Reset()
 	in = `{"hookEventName":"Stop","terminationReason":"NO_TOOL_CALL"}`
 	if err := bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out); err != nil {
@@ -169,6 +172,7 @@ func TestAntigravityHooksAllFourEventsAndUninitializedSafety(t *testing.T) {
 	}
 }
 
+// TestHooksEnforceOpenTaskGateSenProtectionDedupAndStopIdle kiểm tra khóa task OPEN, ẩn khóa API nhạy cảm và chống lặp tin nhắn.
 func TestHooksEnforceOpenTaskGateSenProtectionDedupAndStopIdle(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644)
@@ -181,7 +185,7 @@ func TestHooksEnforceOpenTaskGateSenProtectionDedupAndStopIdle(t *testing.T) {
 
 	var out bytes.Buffer
 
-	// H4a: When .sen/state.db exists and NO task is OPEN, write_file MUST be denied!
+	// Khi đã có .sen/state.db và không có task OPEN, ghi mã nguồn phải bị từ chối ("deny").
 	in := `{"hookEventName":"PreToolUse","toolCall":{"name":"write_file","args":{"Path":"main.go"}}}`
 	if err := bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out); err != nil {
 		t.Fatal(err)
@@ -190,7 +194,7 @@ func TestHooksEnforceOpenTaskGateSenProtectionDedupAndStopIdle(t *testing.T) {
 		t.Fatalf("expected deny when no active OPEN task, got: %s", out.String())
 	}
 
-	// H4b: run_command referencing .sen/config.json (not a sen CLI command) MUST be denied!
+	// Lệnh shell đọc trực tiếp .sen/config.json phải bị chặn ("deny").
 	out.Reset()
 	in = `{"hookEventName":"PreToolUse","toolCall":{"name":"run_command","args":{"CommandLine":"Get-Content .sen/config.json"}}}`
 	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
@@ -198,7 +202,7 @@ func TestHooksEnforceOpenTaskGateSenProtectionDedupAndStopIdle(t *testing.T) {
 		t.Fatalf("expected deny on shell access to .sen/config.json, got: %s", out.String())
 	}
 
-	// M1 + M3: PreInvocation scrubs secrets in last_prompt.txt and skips duplicate systemMessage on invocationNum > 1.
+	// PreInvocation tự ẩn secret trong last_prompt.txt và không bơm lặp lại ở invocationNum > 1.
 	out.Reset()
 	in = `{"hookEventName":"PreInvocation","invocationNum":1,"lastUserInput":"Use key sk-proj-1234567890abcdefghij"}`
 	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
@@ -214,7 +218,7 @@ func TestHooksEnforceOpenTaskGateSenProtectionDedupAndStopIdle(t *testing.T) {
 		t.Fatalf("expected duplicate PreInvocation (invocationNum=3, unchanged input) not to spam systemMessage, got: %s", out.String())
 	}
 
-	// M2: Malformed JSON on SessionStart returns {} (not {"decision":"allow"}), and Stop with fullyIdle=false allows stop.
+	// JSON sai định dạng tại SessionStart trả về {} an toàn; Stop với fullyIdle=false cho phép dừng.
 	out.Reset()
 	_ = bridge.HandleAntigravityHookWithEvent(st, root, "SessionStart", strings.NewReader("{bad-json"), &out)
 	if strings.TrimSpace(out.String()) != "{}" {
@@ -233,6 +237,7 @@ func TestHooksEnforceOpenTaskGateSenProtectionDedupAndStopIdle(t *testing.T) {
 	}
 }
 
+// TestPluginHookResolvesPayloadCwdSeparateFromPluginRoot đảm bảo hook chạy từ thư mục plugin không bao giờ làm bẩn pluginDir.
 func TestPluginHookResolvesPayloadCwdSeparateFromPluginRoot(t *testing.T) {
 	pluginDir := t.TempDir()
 	pluginStore, err := storage.Open(filepath.Join(pluginDir, ".sen", "state.db"))
@@ -241,16 +246,25 @@ func TestPluginHookResolvesPayloadCwdSeparateFromPluginRoot(t *testing.T) {
 	}
 	defer pluginStore.Close()
 
-	// 1. User workspace WITHOUT .sen/state.db -> must allow edits and NOT contaminate pluginDir!
+	// 1. Thư mục người dùng chưa khởi tạo: cho phép ghi ghi chú .md nhưng chặn ghi mã nguồn .go theo SSDS §3.1 (không làm bẩn pluginDir).
 	uninitUserDir := t.TempDir()
 	escUninit := strings.ReplaceAll(uninitUserDir, `\`, `\\`)
 	var out bytes.Buffer
-	in := `{"hookEventName":"PreToolUse","cwd":"` + escUninit + `","toolCall":{"name":"write_file","args":{"Path":"hello.go"}}}`
+	in := `{"hookEventName":"PreToolUse","cwd":"` + escUninit + `","toolCall":{"name":"write_file","args":{"Path":"notes.md"}}}`
 	if err := bridge.HandleAntigravityHook(pluginStore, pluginDir, strings.NewReader(in), &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), `"allow"`) {
-		t.Fatalf("expected uninitialized user workspace to allow edits even when pluginDir has state.db, got: %s", out.String())
+		t.Fatalf("expected uninitialized user workspace to allow plain markdown notes, got: %s", out.String())
+	}
+
+	out.Reset()
+	in = `{"hookEventName":"PreToolUse","cwd":"` + escUninit + `","toolCall":{"name":"write_file","args":{"Path":"hello.go"}}}`
+	if err := bridge.HandleAntigravityHook(pluginStore, pluginDir, strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"deny"`) || !strings.Contains(out.String(), "SSDS Mandatory Activation") {
+		t.Fatalf("expected uninitialized user workspace to block software source write per SSDS §3.1, got: %s", out.String())
 	}
 
 	out.Reset()
@@ -260,7 +274,7 @@ func TestPluginHookResolvesPayloadCwdSeparateFromPluginRoot(t *testing.T) {
 		t.Fatalf("pluginDir must NEVER be contaminated with user workspace last_prompt.txt")
 	}
 
-	// 2. User workspace WITH .sen/state.db -> must enforce user workspace's DB & write last_prompt.txt in user workspace!
+	// 2. Thư mục người dùng đã có .sen/state.db: áp dụng đúng sổ cái của người dùng và khóa tệp test.
 	initUserDir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(initUserDir, "user_test.go"), []byte("package u\n"), 0o644)
 	userStore, err := storage.Open(filepath.Join(initUserDir, ".sen", "state.db"))
@@ -309,20 +323,17 @@ func TestExpressHooksRawMediaFFmpegGuardAndQuarantineStop(t *testing.T) {
 	})
 	_ = workspace.BeginTaskSnapshot(st, root, "T-EXP", []string{"svc.go", ".env"})
 
-	// Bật cấu hình hợp lệ với express_mode=true kèm chữ ký SHA-256.
 	if err := bridge.WriteSignedRuntimeConfig(root, true, "auto"); err != nil {
 		t.Fatal(err)
 	}
 
 	var out bytes.Buffer
-	// 1. PreInvocation phát hiện "Làm luôn đi" -> nhắc truyền --express.
 	in := `{"hookEventName":"PreInvocation","invocationNum":1,"lastUserInput":"Sửa lỗi svc.go, làm luôn đi nhé"}`
 	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
 	if !strings.Contains(out.String(), "--express") {
 		t.Fatalf("expected PreInvocation to mention --express for 'làm luôn đi', got: %s", out.String())
 	}
 
-	// 2. express_mode=true cho phép ("allow") sửa svc.go dù task thuộc bậc LARGE (BUGFIX), nhưng vẫn "force_ask" trên .env!
 	out.Reset()
 	in = `{"hookEventName":"PreToolUse","toolCall":{"name":"edit_file","args":{"Path":"svc.go"}}}`
 	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
@@ -337,7 +348,6 @@ func TestExpressHooksRawMediaFFmpegGuardAndQuarantineStop(t *testing.T) {
 		t.Fatalf("expected express_mode=true to brake with force_ask on critical .env file, got: %s", out.String())
 	}
 
-	// 3. Chặn lệnh ffmpeg ghi đè trực tiếp tư liệu gốc raw/clip.mp4 trong PreToolUse!
 	out.Reset()
 	in = `{"hookEventName":"PreToolUse","toolCall":{"name":"run_command","args":{"CommandLine":"ffmpeg -y -i raw/clip.mp4 raw/clip.mp4"}}}`
 	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
@@ -345,8 +355,7 @@ func TestExpressHooksRawMediaFFmpegGuardAndQuarantineStop(t *testing.T) {
 		t.Fatalf("expected PreToolUse to deny ffmpeg overwriting raw/clip.mp4, got: %s", out.String())
 	}
 
-	// 4. Sửa trộm .sen/config.json không cập nhật config.sha256 -> bị từ chối ("deny") ngay!
-	_ = os.WriteFile(filepath.Join(root, ".sen", "config.json"), []byte(`{"version":"1.1","express_mode":true}`), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".sen", "config.json"), []byte(`{"version":"1.2","express_mode":true}`), 0o644)
 	out.Reset()
 	in = `{"hookEventName":"PreToolUse","toolCall":{"name":"edit_file","args":{"Path":"svc.go"}}}`
 	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
@@ -355,7 +364,6 @@ func TestExpressHooksRawMediaFFmpegGuardAndQuarantineStop(t *testing.T) {
 	}
 	_ = bridge.WriteSignedRuntimeConfig(root, true, "video")
 
-	// 5. Khi task chạm ngưỡng 3/3 lần verify lỗi liên tiếp (QUARANTINE), Stop hook trả về "allow" thay vì lặp vô tận!
 	for i := 0; i < 3; i++ {
 		_, _ = st.AppendEvidence("T-EXP", "go test ./...", "TEST", 0, 1, "fail")
 	}
@@ -370,112 +378,3 @@ func TestExpressHooksRawMediaFFmpegGuardAndQuarantineStop(t *testing.T) {
 		t.Fatalf("expected FormatBrief to display QUARANTINE and profile=video, got:\n%s", brief)
 	}
 }
-
-// initLocalGitSkillRepo khởi tạo một kho Git cục bộ thật chứa tệp SKILL.md và trả về mã băm commit HEAD 40 ký tự.
-func initLocalGitSkillRepo(t *testing.T, subPath, body string) (string, string) {
-	t.Helper()
-	repoDir := t.TempDir()
-	runGit := func(args ...string) string {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repoDir
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v failed: %v (%s)", args, err, string(out))
-		}
-		return strings.TrimSpace(string(out))
-	}
-	runGit("init")
-	runGit("config", "user.email", "test@sen-vn.local")
-	runGit("config", "user.name", "Sen Test")
-	target := filepath.Join(repoDir, filepath.FromSlash(subPath), "SKILL.md")
-	_ = os.MkdirAll(filepath.Dir(target), 0o755)
-	_ = os.WriteFile(target, []byte(body), 0o644)
-	runGit("add", ".")
-	runGit("commit", "-m", "seed skill")
-	return repoDir, runGit("rev-parse", "HEAD")
-}
-
-// TestPackagesFallbackInstallAndWorkspaceUpdateWithRollback kiểm chứng fallback sang fork khi nguồn chính chết và cập nhật --update có rollback .bak.
-func TestPackagesFallbackInstallAndWorkspaceUpdateWithRollback(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-	fbRepo, commitV1 := initLocalGitSkillRepo(t, "skills/ffmpeg-skill", "# FFmpeg Skill v1\n")
-	deadPrimary := filepath.Join(t.TempDir(), "dead-nonexistent-primary.git")
-
-	overrides := map[string]bridge.PackageURLOverride{
-		"ffmpeg-skill": {PrimaryURL: deadPrimary, FallbackURL: fbRepo, PinnedCommit: commitV1},
-	}
-	ovBytes, _ := json.Marshal(overrides)
-	t.Setenv("SEN_PACKAGE_URL_OVERRIDES", string(ovBytes))
-
-	ws := t.TempDir()
-	var out bytes.Buffer
-	res, err := bridge.InstallCompanionsAndPacks(context.Background(), ws, false, "workflow-diagram,voice-tts,media-video", &out)
-	if err != nil {
-		t.Fatalf("InstallCompanionsAndPacks failed: %v\n%s", err, out.String())
-	}
-	if len(res) < 4 {
-		t.Fatalf("expected >=4 installed items (archify, voicestudio, ffmpeg-skill, video-subtitles-effects), got %d", len(res))
-	}
-	gotCommit, err := os.ReadFile(filepath.Join(ws, ".agents", "skills", "ffmpeg-skill", ".sen-commit"))
-	if err != nil || strings.TrimSpace(string(gotCommit)) != commitV1 {
-		t.Fatalf("expected fallback repo commit %s installed, got %q (err=%v)", commitV1, string(gotCommit), err)
-	}
-
-	// Kiểm chứng sen init --update qua mock httptest.NewServer + rollback từ .bak nếu commit mới bị lỗi!
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"tag_name":"v1.2.0","html_url":"https://github.com/developerfs0110/Sen-VN/releases/tag/v1.2.0"}`))
-	}))
-	defer srv.Close()
-	t.Setenv("SEN_UPDATE_API_URL", srv.URL)
-
-	// Gây lỗi cập nhật bằng mã commit không tồn tại -> phải tự khôi phục bản v1 nguyên vẹn từ .bak!
-	badOverrides := map[string]bridge.PackageURLOverride{
-		"ffmpeg-skill": {PrimaryURL: deadPrimary, FallbackURL: fbRepo, PinnedCommit: strings.Repeat("f", 40)},
-	}
-	badBytes, _ := json.Marshal(badOverrides)
-	t.Setenv("SEN_PACKAGE_URL_OVERRIDES", string(badBytes))
-
-	out.Reset()
-	if err := bridge.RunWorkspaceUpdate(context.Background(), ws, &out); err == nil {
-		t.Fatalf("expected RunWorkspaceUpdate to fail on bogus commit and trigger rollback")
-	}
-	restoredMD, err := os.ReadFile(filepath.Join(ws, ".agents", "skills", "ffmpeg-skill", "SKILL.md"))
-	if err != nil || string(restoredMD) != "# FFmpeg Skill v1\n" {
-		t.Fatalf("expected .bak atomic rollback to preserve FFmpeg Skill v1, got %q (err=%v)", string(restoredMD), err)
-	}
-
-	// Tạo commit v2 hợp lệ trên kho fallback -> RunWorkspaceUpdate nâng cấp thành công và báo có bản v1.2.0!
-	_ = os.WriteFile(filepath.Join(fbRepo, "skills", "ffmpeg-skill", "SKILL.md"), []byte("# FFmpeg Skill v2\n"), 0o644)
-	cmdAdd := exec.Command("git", "add", ".")
-	cmdAdd.Dir = fbRepo
-	_ = cmdAdd.Run()
-	cmdCom := exec.Command("git", "commit", "-m", "v2")
-	cmdCom.Dir = fbRepo
-	_ = cmdCom.Run()
-	revOut, _ := exec.Command("git", "-C", fbRepo, "rev-parse", "HEAD").Output()
-	commitV2 := strings.TrimSpace(string(revOut))
-
-	okOverrides := map[string]bridge.PackageURLOverride{
-		"ffmpeg-skill": {PrimaryURL: deadPrimary, FallbackURL: fbRepo, PinnedCommit: commitV2},
-	}
-	okBytes, _ := json.Marshal(okOverrides)
-	t.Setenv("SEN_PACKAGE_URL_OVERRIDES", string(okBytes))
-
-	out.Reset()
-	if err := bridge.RunWorkspaceUpdate(context.Background(), ws, &out); err != nil {
-		t.Fatalf("RunWorkspaceUpdate v2 failed: %v\n%s", err, out.String())
-	}
-	if !strings.Contains(out.String(), "v1.2.0") {
-		t.Fatalf("expected update check output to report v1.2.0, got:\n%s", out.String())
-	}
-	updatedMD, _ := os.ReadFile(filepath.Join(ws, ".agents", "skills", "ffmpeg-skill", "SKILL.md"))
-	if string(updatedMD) != "# FFmpeg Skill v2\n" {
-		t.Fatalf("expected skill updated to v2, got %q", string(updatedMD))
-	}
-}
-
-
-

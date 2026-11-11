@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/developerfs0110/Sen-VN/internal/ssds"
 	"github.com/developerfs0110/Sen-VN/internal/storage"
 	"github.com/developerfs0110/Sen-VN/internal/workspace"
 )
@@ -40,7 +41,7 @@ func ContainsExpressPhrase(input string) bool {
 	return false
 }
 
-// evaluateWriteToolDecision áp dụng khóa .sen/, khóa test/raw, kiểm tra chữ ký config.sha256 và phân quyền theo --express.
+// evaluateWriteToolDecision áp dụng tường lửa pha SSDS, chống vượt ranh giới dự án con, khóa .sen/, khóa test/raw và kiểm soát --express.
 func evaluateWriteToolDecision(st *storage.Store, root, toolName string, args map[string]any, stdout io.Writer) error {
 	rawPath := extractStringArg(args, "Path", "TargetFile", "file_path", "path")
 	if rawPath == "" {
@@ -57,7 +58,16 @@ func evaluateWriteToolDecision(st *storage.Store, root, toolName string, args ma
 			"reason":   "Protected .sen/ ledger cannot be edited by agent tools.",
 		})
 	}
+	if subErr := workspace.CheckNoSubprojectCrossing(root, rel); subErr != nil {
+		return writeJSON(stdout, map[string]any{"decision": "deny", "reason": subErr.Error()})
+	}
 	if st == nil {
+		if workspace.IsSoftwareSourceOrManifestPath(rel) {
+			return writeJSON(stdout, map[string]any{
+				"decision": "deny",
+				"reason":   "SSDS Mandatory Activation (SEN-STD-SDLC-001 §3.1): Software file write blocked because SSDS lifecycle is not initialized for this project. Run 'sen sdlc classify' and present the SSDS Workflow Declaration first.",
+			})
+		}
 		return writeJSON(stdout, map[string]any{"decision": "allow"})
 	}
 	expressMode, _, tampered := ReadVerifiedRuntimeConfig(root)
@@ -72,6 +82,26 @@ func evaluateWriteToolDecision(st *storage.Store, root, toolName string, args ma
 	}
 
 	openTask := findOpenTask(st)
+	proj, _ := st.GetSSDSProject()
+	workflowTier := ""
+	if proj != nil {
+		workflowTier = proj.WorkflowTier
+		if fwErr := ssds.CheckWriteFirewall(st, root, rel); fwErr != nil {
+			return writeJSON(stdout, map[string]any{"decision": "deny", "reason": fwErr.Error()})
+		}
+		if proj.CurrentPhase == "P5" && workspace.IsSoftwareSourceOrManifestPath(rel) {
+			if preErr := ssds.CanBeginImplementationTask(st, root); preErr != nil {
+				return writeJSON(stdout, map[string]any{"decision": "deny", "reason": preErr.Error()})
+			}
+		}
+		if openTask == nil && !workspace.IsSoftwareSourceOrManifestPath(rel) && toolName != "delete_file" {
+			if snaps, sErr := st.GetSnapshots(workspace.BaselineTaskID); sErr == nil && len(snaps) > 0 {
+				_ = workspace.AdvanceBaseline(st, root, []string{rel})
+			}
+			return writeJSON(stdout, map[string]any{"decision": "allow"})
+		}
+	}
+
 	if openTask == nil {
 		return writeJSON(stdout, map[string]any{
 			"decision": "deny",
@@ -84,13 +114,24 @@ func evaluateWriteToolDecision(st *storage.Store, root, toolName string, args ma
 			"reason":   fmt.Sprintf("File %q is outside active OPEN task %q scope_files %v.", rel, openTask.ID, openTask.ScopeFiles),
 		})
 	}
-	return decideRiskOrExpressApproval(root, rel, toolName, openTask, expressMode, stdout)
+	return decideRiskOrExpressApproval(root, rel, toolName, openTask, expressMode, workflowTier, stdout)
 }
 
-// decideRiskOrExpressApproval cho qua SMALL/MEDIUM/LARGE thường khi bật --express, nhưng phanh gấp nếu xóa tệp hoặc chạm đường dẫn trọng yếu.
-func decideRiskOrExpressApproval(root, rel, toolName string, openTask *storage.Task, expressMode bool, stdout io.Writer) error {
+// decideRiskOrExpressApproval cho qua SMALL/MEDIUM/LARGE thường khi bật --express, nhưng phanh cứng ở WF_CRITICAL, xóa tệp hoặc đường dẫn trọng yếu.
+func decideRiskOrExpressApproval(root, rel, toolName string, openTask *storage.Task, expressMode bool, workflowTier string, stdout io.Writer) error {
 	isCrit, critReason := workspace.IsDestructiveOrCriticalFile(root, rel)
 	hasDelete := workspace.TaskAllowsDelete(root, openTask.ID) || toolName == "delete_file"
+
+	if strings.EqualFold(workflowTier, "WF_CRITICAL") && (hasDelete || isCrit) {
+		reason := critReason
+		if reason == "" {
+			reason = "file deletion"
+		}
+		return writeJSON(stdout, map[string]any{
+			"decision": "force_ask",
+			"reason":   fmt.Sprintf("SSDS §21 WF_CRITICAL brake (%s): explicit user confirmation required before editing %q even under --express.", reason, rel),
+		})
+	}
 
 	if expressMode {
 		if hasDelete {

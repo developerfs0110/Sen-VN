@@ -78,7 +78,7 @@ func scanWorkspaceFiles(root string) (map[string]storage.Snapshot, []storage.Sna
 			return fmt.Errorf("symlink or reparse point forbidden in workspace: %s", rel)
 		}
 		if d.IsDir() {
-			if ignoredDirs[strings.ToLower(d.Name())] {
+			if ignoredDirs[strings.ToLower(d.Name())] || isIsolatedNestedProjectDir(fullPath) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -194,6 +194,11 @@ func BeginTaskSnapshotWithOpts(st *storage.Store, root, taskID string, scopeFile
 			return fmt.Errorf("pre-existing test file %q is locked and cannot be listed in --files", rel)
 		}
 	}
+	if baseSnaps, bErr := st.GetSnapshots(BaselineTaskID); bErr == nil && len(baseSnaps) > 0 {
+		if err := CheckIntegrity(st, root, "", nil); err != nil {
+			return fmt.Errorf("pre-begin workspace integrity violation (unauthorized edit before sen begin): %w", err)
+		}
+	}
 
 	snapBaseDir := filepath.Join(root, ".sen", "snapshots", taskID)
 	if err := os.MkdirAll(snapBaseDir, 0o755); err != nil {
@@ -224,6 +229,9 @@ func normalizeAndValidateScope(root string, scopeFiles []string) ([]string, erro
 		lower := strings.ToLower(rel)
 		if lower == ".sen" || strings.HasPrefix(lower, ".sen/") {
 			return nil, fmt.Errorf("cannot include protected .sen path %q in scope", rel)
+		}
+		if err := CheckNoSubprojectCrossing(root, rel); err != nil {
+			return nil, err
 		}
 		if err := ensureNoSymlinkChain(root, rel); err != nil {
 			return nil, err

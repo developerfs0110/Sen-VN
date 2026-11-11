@@ -65,7 +65,7 @@ func assertPluginManifestAndFiles(t *testing.T) map[string]any {
 	if err := json.Unmarshal(rawPlugin, &manifest); err != nil {
 		t.Fatalf("invalid plugin.json: %v", err)
 	}
-	if manifest["name"] != "sen-vn" || manifest["version"] != "1.1.0" || manifest["repository"] != "https://github.com/developerfs0110/Sen-VN" {
+	if manifest["name"] != "sen-vn" || manifest["version"] != "1.2.0" || manifest["repository"] != "https://github.com/developerfs0110/Sen-VN" {
 		t.Fatalf("unexpected plugin.json metadata: %+v", manifest)
 	}
 
@@ -77,9 +77,9 @@ func assertPluginManifestAndFiles(t *testing.T) map[string]any {
 	if err := json.Unmarshal(rawHooks, &hooksMap); err != nil {
 		t.Fatalf("invalid root hooks.json: %v", err)
 	}
-	senHooks, ok := hooksMap["sen-mvp"].(map[string]any)
+	senHooks, ok := hooksMap["sen-vn"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected top-level sen-mvp key in hooks.json, got: %+v", hooksMap)
+		t.Fatalf("expected top-level sen-vn key in hooks.json, got: %+v", hooksMap)
 	}
 	for _, ev := range []string{"SessionStart", "PreInvocation", "PreToolUse", "Stop"} {
 		if _, exists := senHooks[ev]; !exists {

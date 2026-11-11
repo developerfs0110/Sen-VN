@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/developerfs0110/Sen-VN/internal/redact"
+	"github.com/developerfs0110/Sen-VN/internal/ssds"
 	"github.com/developerfs0110/Sen-VN/internal/storage"
 	"github.com/developerfs0110/Sen-VN/internal/workspace"
 )
@@ -85,8 +86,9 @@ func EvaluateDoneGateWithOpts(
 		}
 	}
 
+	proj, _ := st.GetSSDSProject()
 	opts = normalizeDoneOptions(root, opts)
-	table := redact.ScrubText(formatCoverageTable(rows, finalEv, opts))
+	table := redact.ScrubText(formatCoverageTable(rows, finalEv, opts, proj))
 	mdPath := filepath.Join(root, ".sen", "delivery-report.md")
 	if err := os.MkdirAll(filepath.Dir(mdPath), 0o755); err != nil {
 		return nil, err
@@ -94,6 +96,9 @@ func EvaluateDoneGateWithOpts(
 	header := fmt.Sprintf("# Sen-VN v%s Delivery Report\n\n", strings.TrimPrefix(opts.Version, "v"))
 	if err := os.WriteFile(mdPath, []byte(header+table), 0o644); err != nil {
 		return nil, err
+	}
+	if proj != nil {
+		_ = ssds.SyncProjectStateFiles(st, root)
 	}
 
 	return &DoneReport{
@@ -116,10 +121,13 @@ func normalizeDoneOptions(root string, opts DoneOptions) DoneOptions {
 	return opts
 }
 
-// verifyPreDoneState kiểm tra chuỗi băm bằng chứng từ GENESIS, không còn task OPEN và không có tệp trôi lệch khỏi __BASELINE__.
+// verifyPreDoneState kiểm tra chuỗi băm bằng chứng/quản trị, các pha SSDS bắt buộc, không còn task OPEN và toàn vẹn __BASELINE__.
 func verifyPreDoneState(st *storage.Store, root string) error {
 	if err := st.VerifyEvidenceChain(); err != nil {
 		return fmt.Errorf("evidence hash-chain violation: %w", err)
+	}
+	if err := st.VerifyGovernanceChain(); err != nil {
+		return fmt.Errorf("governance hash-chain violation: %w", err)
 	}
 	tasks, err := st.ListTasks()
 	if err != nil {
@@ -128,6 +136,31 @@ func verifyPreDoneState(st *storage.Store, root string) error {
 	for _, t := range tasks {
 		if t.Status == "OPEN" {
 			return fmt.Errorf("task %q is still OPEN (run `sen verify %s -- ...` or `sen undo %s`)", t.ID, t.ID, t.ID)
+		}
+	}
+	proj, err := st.GetSSDSProject()
+	if err != nil {
+		return err
+	}
+	if proj != nil {
+		if err := ssds.CheckActiveExceptions(st); err != nil {
+			return err
+		}
+		if violations := ssds.VerifyApprovedBaselineIntegrity(st, root); len(violations) > 0 {
+			return fmt.Errorf("SSDS §17 approved baseline violation: %s", strings.Join(violations, "; "))
+		}
+		for _, reqPhase := range proj.ActivePhases {
+			if strings.EqualFold(reqPhase, "P9") {
+				continue
+			}
+			ph, pErr := st.GetSSDSPhase(reqPhase)
+			if pErr != nil {
+				return fmt.Errorf("SSDS required phase %s missing: %w", reqPhase, pErr)
+			}
+			if !ph.GatePassed || (ph.Status != "APPROVED" && ph.Status != "COMPLETED") {
+				return fmt.Errorf("SSDS phase %s must pass quality gate and reach APPROVED/COMPLETED before sen done (status=%s, gate_passed=%v)",
+					reqPhase, ph.Status, ph.GatePassed)
+			}
 		}
 	}
 	if err := workspace.CheckIntegrity(st, root, "", nil); err != nil {
@@ -146,6 +179,7 @@ func queryRequirementCoverage(st *storage.Store) ([]DoneRow, error) {
 		return nil, errors.New("zero requirements recorded: run `sen intake` before `sen done`")
 	}
 
+	proj, _ := st.GetSSDSProject()
 	var rows []DoneRow
 	var uncovered []string
 	for _, r := range reqs {
@@ -170,6 +204,9 @@ func queryRequirementCoverage(st *storage.Store) ([]DoneRow, error) {
 		`, r.ID, mustTest).Scan(&row.TaskID, &row.RiskTier, &row.Strength, &row.TestsRan, &row.Command)
 
 		if errors.Is(err, sql.ErrNoRows) {
+			if proj != nil && (r.ReqType == "BUS_RULE" || r.ReqType == "CONSTRAINT") {
+				continue
+			}
 			uncovered = append(uncovered, r.ID)
 			continue
 		}
@@ -180,6 +217,9 @@ func queryRequirementCoverage(st *storage.Store) ([]DoneRow, error) {
 	}
 	if len(uncovered) > 0 {
 		return nil, fmt.Errorf("uncovered requirements missing VERIFIED passing evidence: %s", strings.Join(uncovered, ", "))
+	}
+	if len(rows) == 0 {
+		return nil, errors.New("zero functional/non-functional requirements verified with passing evidence")
 	}
 	return rows, nil
 }
@@ -229,14 +269,18 @@ func sanitizeCell(s string, max int) string {
 	return s
 }
 
-// formatCoverageTable định dạng phần siêu dữ liệu v1.1.0 và bảng đối chiếu R_i <-> Risk Tier <-> Strength/Streams.
-func formatCoverageTable(rows []DoneRow, finalEv *storage.Evidence, opts DoneOptions) string {
+// formatCoverageTable định dạng siêu dữ liệu Sen-VN v1.2.0 / SSDS và bảng đối chiếu R_i <-> Risk Tier <-> Strength/Streams.
+func formatCoverageTable(rows []DoneRow, finalEv *storage.Evidence, opts DoneOptions, proj *storage.SSDSProject) string {
 	var b strings.Builder
 	expressLabel := "off"
 	if opts.ExpressMode {
 		expressLabel = "on"
 	}
 	b.WriteString(fmt.Sprintf("- **Sen-VN Version:** `v%s`\n", strings.TrimPrefix(opts.Version, "v")))
+	if proj != nil {
+		b.WriteString(fmt.Sprintf("- **SSDS Metadata:** Standard: SEN-STD-SDLC-001 v%s | Category: %s | Workflow: %s\n",
+			proj.AppliedSSDSVersion, proj.Category, proj.WorkflowTier))
+	}
 	b.WriteString(fmt.Sprintf("- **Domain Profile:** `%s` | **Express Mode:** `%s`\n", opts.DomainProfile, expressLabel))
 	b.WriteString(fmt.Sprintf("- **Companions:** `%s`\n\n", opts.Companions))
 

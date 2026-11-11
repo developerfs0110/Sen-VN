@@ -14,7 +14,9 @@ import (
 
 const (
 	// CurrentVersion định danh phiên bản phát hành chính thức của Sen-VN.
-	CurrentVersion = "1.1.0"
+	CurrentVersion = "1.2.0"
+	// DefaultSSDSVersion định danh phiên bản tiêu chuẩn SEN-STD-SDLC-001 mặc định ghim cho dự án mới.
+	DefaultSSDSVersion = "1.0.0"
 	// MaxRepairRounds giới hạn tối đa 3 lần chạy verify thất bại liên tiếp trước khi kích hoạt cách ly (Quarantine).
 	MaxRepairRounds = 3
 )
@@ -200,4 +202,3 @@ func readQuarantineResetSeq(root, taskID string) (int64, bool) {
 	}
 	return 0, true
 }
-

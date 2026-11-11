@@ -1,4 +1,4 @@
-// Tệp commands.go cài đặt các lệnh khởi tạo, tóm tắt ngữ cảnh, tiếp nhận yêu cầu và mở task (init, brief, intake, begin).
+// Tệp commands.go cài đặt các lệnh khởi tạo dự án, tóm tắt ngữ cảnh đầu phiên và tiếp nhận yêu cầu (init, brief, intake).
 package main
 
 import (
@@ -14,12 +14,13 @@ import (
 	"strings"
 
 	"github.com/developerfs0110/Sen-VN/internal/bridge"
+	"github.com/developerfs0110/Sen-VN/internal/ssds"
 	"github.com/developerfs0110/Sen-VN/internal/storage"
 	"github.com/developerfs0110/Sen-VN/internal/verify"
 	"github.com/developerfs0110/Sen-VN/internal/workspace"
 )
 
-// cmdInit khởi tạo sổ cái .sen/state.db, cấu hình v1.1, cài đặt gói đồng hành/packs, cập nhật (--update) và chụp __BASELINE__.
+// cmdInit khởi tạo sổ cái .sen/state.db, cấu hình v1.2 (bảo toàn ssds_version đã ghim), cài đặt gói đồng hành và chụp __BASELINE__.
 func cmdInit(cwd string, args []string, stdout io.Writer) error {
 	reordered := reorderFlagsFirst(args, map[string]bool{"packs": true, "profile": true})
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
@@ -40,43 +41,44 @@ func cmdInit(cwd string, args []string, stdout io.Writer) error {
 		fmt.Fprint(stdout, bridge.FormatPacksCatalog())
 		return nil
 	}
+	root := resolveProjectRoot(cwd)
 	if *updateFlag && !*installCompanions && strings.TrimSpace(*packsFlag) == "" {
-		return bridge.RunWorkspaceUpdate(context.Background(), resolveProjectRoot(cwd), stdout)
+		return bridge.RunWorkspaceUpdate(context.Background(), root, stdout)
 	}
 
-	cfg, err := ensureInitWorkspace(cwd, fs, *profileFlag, *expressFlag, *overwriteAgents)
+	cfg, err := ensureInitWorkspace(root, fs, *profileFlag, *expressFlag, *overwriteAgents)
 	if err != nil {
 		return err
 	}
 	if *installCompanions || strings.TrimSpace(*packsFlag) != "" {
 		if _, err := bridge.InstallCompanionsAndPacks(
-			context.Background(), cwd, *installCompanions, *packsFlag, stdout,
+			context.Background(), root, *installCompanions, *packsFlag, stdout,
 		); err != nil {
 			return err
 		}
 	}
 	if *updateFlag {
-		if err := bridge.RunWorkspaceUpdate(context.Background(), cwd, stdout); err != nil {
+		if err := bridge.RunWorkspaceUpdate(context.Background(), root, stdout); err != nil {
 			return err
 		}
 	}
 
-	comp := bridge.DetectCompanions(cwd)
+	comp := bridge.DetectCompanions(root)
 	if *agyHooks || comp.AntigravityEnv {
-		if err := bridge.WriteAntigravityHooksFile(filepath.Join(cwd, ".agents", "hooks.json")); err != nil {
+		if err := bridge.WriteAntigravityHooksFile(filepath.Join(root, ".agents", "hooks.json")); err != nil {
 			return err
 		}
 	}
-	resolvedProf := workspace.ResolveDomainProfile(cwd, cfg.DomainProfile)
-	fmt.Fprintf(stdout, "Initialized Sen-VN v%s in %s [profile=%s express=%t]\n",
-		workspace.CurrentVersion, cwd, resolvedProf, cfg.ExpressMode)
+	resolvedProf := workspace.ResolveDomainProfile(root, cfg.DomainProfile)
+	fmt.Fprintf(stdout, "Initialized Sen-VN v%s in %s [profile=%s ssds=%s express=%t]\n",
+		workspace.CurrentVersion, root, resolvedProf, cfg.SSDSVersion, cfg.ExpressMode)
 	if *withCompanions || *installCompanions || comp.AntigravityEnv {
 		fmt.Fprintf(stdout, "Companions: %s\n", comp.FormatCompact())
 	}
 	return nil
 }
 
-// ensureInitWorkspace tạo thư mục .sen, mở SQLite state.db, lưu cấu hình có chữ ký, ghi AGENTS.md và chụp __BASELINE__.
+// ensureInitWorkspace tạo thư mục .sen, mở SQLite state.db, lưu cấu hình có chữ ký, ghi AGENTS.md và chụp __BASELINE__ một lần duy nhất.
 func ensureInitWorkspace(cwd string, fs *flag.FlagSet, profileVal string, expressVal, overwriteAgents bool) (Config, error) {
 	prof, err := workspace.ValidateDomainProfile(profileVal)
 	if err != nil {
@@ -91,26 +93,42 @@ func ensureInitWorkspace(cwd string, fs *flag.FlagSet, profileVal string, expres
 	}
 	defer st.Close()
 
-	cfg, err := upsertInitConfig(cwd, prof, flagVisited(fs, "profile"), expressVal, flagVisited(fs, "express"))
+	cfg, err := upsertInitConfig(cwd, st, prof, flagVisited(fs, "profile"), expressVal, flagVisited(fs, "express"))
 	if err != nil {
 		return Config{}, err
 	}
 	agentsPath := filepath.Join(cwd, "AGENTS.md")
+	wroteAgents := false
 	if overwriteAgents || !fileExists(agentsPath) {
 		if err := os.WriteFile(agentsPath, []byte(bridge.RenderAgentsMD()), 0o644); err != nil {
 			return Config{}, err
 		}
+		wroteAgents = true
 	}
-	if err := workspace.CaptureBaseline(st, cwd); err != nil {
-		return Config{}, err
+	tasks, _ := st.ListTasks()
+	hasOpen := false
+	for _, t := range tasks {
+		if t.Status == "OPEN" {
+			hasOpen = true
+			break
+		}
+	}
+	existingBase, _ := st.GetSnapshots(workspace.BaselineTaskID)
+	if !hasOpen && len(existingBase) == 0 {
+		if err := workspace.CaptureBaseline(st, cwd); err != nil {
+			return Config{}, err
+		}
+	} else if !hasOpen && len(existingBase) > 0 && wroteAgents {
+		_ = workspace.AdvanceBaseline(st, cwd, []string{"AGENTS.md"})
 	}
 	return cfg, nil
 }
 
-// upsertInitConfig khởi tạo mới hoặc cập nhật .sen/config.json với DomainProfile và ExpressMode đã xác thực.
-func upsertInitConfig(cwd, prof string, profVisited, expressVal, expressVisited bool) (Config, error) {
+// upsertInitConfig khởi tạo mới hoặc cập nhật .sen/config.json và tuyệt đối bảo toàn ssds_version / project_id đã ghim (Phần II).
+func upsertInitConfig(cwd string, st *storage.Store, prof string, profVisited, expressVal, expressVisited bool) (Config, error) {
 	cfgPath := filepath.Join(cwd, ".sen", "config.json")
-	if fileExists(cfgPath) {
+	sumPath := filepath.Join(cwd, ".sen", "config.sha256")
+	if fileExists(cfgPath) || fileExists(sumPath) {
 		cfg, err := loadConfig(cwd)
 		if err != nil {
 			return Config{}, err
@@ -122,12 +140,33 @@ func upsertInitConfig(cwd, prof string, profVisited, expressVal, expressVisited 
 		if expressVisited {
 			cfg.ExpressMode = expressVal
 		}
-		cfg.Version = "1.1"
+		if proj, _ := st.GetSSDSProject(); proj != nil {
+			if strings.TrimSpace(cfg.SSDSVersion) == "" {
+				cfg.SSDSVersion = proj.AppliedSSDSVersion
+			}
+			if strings.TrimSpace(cfg.ProjectID) == "" {
+				cfg.ProjectID = proj.ProjectID
+			}
+		}
+		if strings.TrimSpace(cfg.SSDSVersion) == "" {
+			cfg.SSDSVersion = ssds.BundledLatestVersion
+		}
+		cfg.Version = "1.2"
 		return cfg, saveConfig(cwd, cfg)
 	}
 	resolved := workspace.ResolveDomainProfile(cwd, prof)
+	pinnedVer := ssds.BundledLatestVersion
+	projID := ""
+	if proj, _ := st.GetSSDSProject(); proj != nil {
+		if strings.TrimSpace(proj.AppliedSSDSVersion) != "" {
+			pinnedVer = proj.AppliedSSDSVersion
+		}
+		projID = proj.ProjectID
+	}
 	cfg := Config{
-		Version:          "1.1",
+		Version:          "1.2",
+		SSDSVersion:      pinnedVer,
+		ProjectID:        projID,
 		AllowedBinaries:  verify.DefaultAllowedBinaries(),
 		ProjectVerifyCmd: detectDefaultVerifyCmd(cwd, resolved),
 		TimeoutSeconds:   120,
@@ -170,7 +209,7 @@ func cmdBrief(cwd string, args []string, stdin io.Reader, stdout io.Writer) erro
 	return nil
 }
 
-// runHookBrief tách biệt thư mục cài plugin với thư mục workspace của người dùng dựa trên trường cwd từ stdin JSON.
+// runHookBrief chuyển tiếp dữ liệu JSON stdin sang bộ định tuyến đa dự án HandleAntigravityHookWithEvent.
 func runHookBrief(root, fallbackEvent string, stdin io.Reader, stdout io.Writer) error {
 	var rawBuf []byte
 	if stdin != nil {
@@ -188,14 +227,15 @@ func runHookBrief(root, fallbackEvent string, stdin io.Reader, stdout io.Writer)
 			root = strings.TrimSpace(probe.WorkspacePaths[0])
 		}
 	}
+	effRoot, hasDB := workspace.ResolveNearestProjectRoot("", root)
 	var st *storage.Store
-	if fileExists(filepath.Join(root, ".sen", "state.db")) {
-		st, _ = storage.Open(filepath.Join(root, ".sen", "state.db"))
+	if hasDB {
+		st, _ = storage.Open(filepath.Join(effRoot, ".sen", "state.db"))
 		if st != nil {
 			defer st.Close()
 		}
 	}
-	return bridge.HandleAntigravityHookWithEvent(st, root, fallbackEvent, bytes.NewReader(rawBuf), stdout)
+	return bridge.HandleAntigravityHookWithEvent(st, effRoot, fallbackEvent, bytes.NewReader(rawBuf), stdout)
 }
 
 // cmdIntake ghi nhận nguyên văn yêu cầu của người dùng (R1..Rn, R_sec, R_law), bật/tắt --express hoặc quản lý <= 20 luật dự án.
@@ -310,166 +350,11 @@ func applyReqIntake(st *storage.Store, root, req, quote string, bugfix, sec, vnL
 		}
 		fmt.Fprintf(stdout, "Recorded %s: %s\n", r.ID, r.Summary)
 	}
-	tasks, _ := st.ListTasks()
 	baseSnaps, _ := st.GetSnapshots(workspace.BaselineTaskID)
-	if len(tasks) == 0 || len(baseSnaps) == 0 {
+	if len(baseSnaps) == 0 {
 		if err := workspace.CaptureBaseline(st, root); err != nil {
 			return false, err
 		}
 	}
 	return true, nil
-}
-
-// cmdBegin mở một task mới với phạm vi tệp tường minh, khóa tệp test/media gốc, sao lưu snapshot và định cỡ rủi ro 3 tầng.
-func cmdBegin(cwd string, args []string, stdout io.Writer) error {
-	root := resolveProjectRoot(cwd)
-	st, err := openExistingStore(root)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-
-	reordered := reorderFlagsFirst(args, map[string]bool{
-		"reqs": true, "files": true, "kind": true, "title": true,
-	})
-	fs := flag.NewFlagSet("begin", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	reqsCSV := fs.String("reqs", "", "comma-separated requirement IDs")
-	filesCSV := fs.String("files", "", "comma-separated scope file paths")
-	kindFlag := fs.String("kind", "", "feature|bugfix|ui")
-	allowDelete := fs.Bool("allow-delete", false, "permit deleting declared existing scope files (LARGE risk)")
-	express := fs.Bool("express", false, "toggle autonomous express mode")
-	titleFlag := fs.String("title", "", "task title")
-	if err := fs.Parse(reordered); err != nil {
-		return err
-	}
-	if err := applyExpressFlagIfVisited(root, fs, *express); err != nil {
-		return err
-	}
-	if len(fs.Args()) == 0 {
-		return errors.New("missing <task_id>")
-	}
-	taskID := strings.TrimSpace(fs.Args()[0])
-	if err := workspace.ValidateTaskID(taskID); err != nil {
-		return err
-	}
-	if err := ensureCanOpenNewTask(st, taskID); err != nil {
-		return err
-	}
-	return createAndSnapshotTask(st, root, taskID, *reqsCSV, *filesCSV, *kindFlag, *titleFlag, *allowDelete, stdout)
-}
-
-// createAndSnapshotTask kiểm tra danh sách yêu cầu, khóa tệp test/media gốc, chụp snapshot và lưu task mới với bậc SMALL/MEDIUM/LARGE.
-func createAndSnapshotTask(
-	st *storage.Store, root, taskID, reqsCSV, filesCSV, kindFlag, titleFlag string, allowDelete bool, stdout io.Writer,
-) error {
-	reqIDs, hasBugfixReq, err := resolveBeginReqs(st, reqsCSV)
-	if err != nil {
-		return err
-	}
-	normFiles, err := resolveBeginFiles(root, filesCSV)
-	if err != nil {
-		return err
-	}
-	kind, err := workspace.ValidateKind(kindFlag)
-	if err != nil {
-		return err
-	}
-	if hasBugfixReq {
-		kind = "BUGFIX"
-	} else if kind == "" {
-		kind = "FEATURE"
-	}
-	if err := workspace.BeginTaskSnapshotWithOpts(st, root, taskID, normFiles, allowDelete); err != nil {
-		return err
-	}
-	risk, reasons := workspace.ComputeRiskWithOpts(normFiles, kind, allowDelete, root)
-	title := strings.TrimSpace(titleFlag)
-	if title == "" {
-		title = fmt.Sprintf("%s (%s)", taskID, strings.Join(reqIDs, ","))
-	}
-	if err := st.CreateTask(storage.Task{
-		ID: taskID, ReqIDs: reqIDs, Title: title, Kind: kind,
-		RiskAuto: risk, ScopeFiles: normFiles, Status: "OPEN",
-	}); err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "Opened task %s [kind=%s risk=%s reqs=%v files=%v]\n", taskID, kind, risk, reqIDs, normFiles)
-	if len(reasons) > 0 {
-		fmt.Fprintf(stdout, "Risk factors: %s\n", strings.Join(reasons, "; "))
-	}
-	return nil
-}
-
-// ensureCanOpenNewTask đảm bảo mã task chưa từng được dùng và không có task nào khác đang mở (OPEN).
-func ensureCanOpenNewTask(st *storage.Store, taskID string) error {
-	tasks, err := st.ListTasks()
-	if err != nil {
-		return err
-	}
-	for _, t := range tasks {
-		if t.ID == taskID {
-			return fmt.Errorf("task %q already exists (status=%s); choose a new task ID", taskID, t.Status)
-		}
-		if t.Status == "OPEN" {
-			return fmt.Errorf("cannot begin %q while task %q is still OPEN", taskID, t.ID)
-		}
-	}
-	return nil
-}
-
-// resolveBeginReqs đối chiếu danh sách mã yêu cầu R_i với sổ cái và phát hiện cờ sửa lỗi (IsBugfix).
-func resolveBeginReqs(st *storage.Store, reqsCSV string) ([]string, bool, error) {
-	reqIDs := splitCSV(reqsCSV)
-	if len(reqIDs) == 0 {
-		return nil, false, errors.New("missing --reqs (e.g. --reqs R1)")
-	}
-	existingReqs, err := st.ListRequirements()
-	if err != nil {
-		return nil, false, err
-	}
-	reqMap := make(map[string]storage.Requirement, len(existingReqs))
-	for _, r := range existingReqs {
-		reqMap[r.ID] = r
-	}
-	hasBugfix := false
-	for _, id := range reqIDs {
-		r, ok := reqMap[id]
-		if !ok {
-			return nil, false, fmt.Errorf("unknown requirement %q (record via `sen intake` first)", id)
-		}
-		if r.IsBugfix {
-			hasBugfix = true
-		}
-	}
-	return reqIDs, hasBugfix, nil
-}
-
-// resolveBeginFiles chuẩn hóa và kiểm tra an toàn đường dẫn tương đối cho toàn bộ tệp thuộc phạm vi task.
-func resolveBeginFiles(root, filesCSV string) ([]string, error) {
-	rawFiles := splitCSV(filesCSV)
-	if len(rawFiles) == 0 {
-		return nil, errors.New("missing --files (declare exact scope files)")
-	}
-	var normFiles []string
-	for _, f := range rawFiles {
-		nf, err := workspace.NormalizeRelPath(root, f)
-		if err != nil {
-			return nil, err
-		}
-		normFiles = append(normFiles, nf)
-	}
-	return normFiles, nil
-}
-
-// splitCSV tách chuỗi phân cách bằng dấu phẩy thành danh sách các phần tử đã cắt khoảng trắng.
-func splitCSV(s string) []string {
-	var out []string
-	for _, part := range strings.Split(s, ",") {
-		p := strings.TrimSpace(part)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }

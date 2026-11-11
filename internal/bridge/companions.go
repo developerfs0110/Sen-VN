@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/developerfs0110/Sen-VN/internal/ssds"
 	"github.com/developerfs0110/Sen-VN/internal/storage"
 	"github.com/developerfs0110/Sen-VN/internal/workspace"
 )
@@ -28,9 +29,11 @@ type CompanionStatus struct {
 	AntigravityEnv    bool
 }
 
-// runtimeConfigView ánh xạ các trường cấu hình vận hành trong .sen/config.json cần thiết cho hook và brief.
+// runtimeConfigView ánh xạ các trường cấu hình vận hành trong .sen/config.json cần thiết cho hook, SSDS và brief.
 type runtimeConfigView struct {
 	Version          string   `json:"version"`
+	SSDSVersion      string   `json:"ssds_version,omitempty"`
+	ProjectID        string   `json:"project_id,omitempty"`
 	AllowedBinaries  []string `json:"allowed_binaries,omitempty"`
 	ProjectVerifyCmd []string `json:"project_verify_cmd,omitempty"`
 	TimeoutSeconds   int      `json:"timeout_seconds,omitempty"`
@@ -110,49 +113,104 @@ func scanAgentsDirAtLevel(agentsDir string, st *CompanionStatus) {
 	}
 }
 
-// ReadVerifiedRuntimeConfig đọc .sen/config.json và đối chiếu chữ ký .sen/config.sha256 để chống Agent bật lén express_mode.
+// verifyExistingSignedConfig kiểm tra nghiêm ngặt tính toàn vẹn cặp tệp .sen/config.json và .sen/config.sha256 (bắt cả lỗi xóa/rỗng).
+func verifyExistingSignedConfig(root string) (*runtimeConfigView, bool, error) {
+	cfgPath := filepath.Join(root, ".sen", "config.json")
+	sumPath := filepath.Join(root, ".sen", "config.sha256")
+	_, cfgErr := os.Stat(cfgPath)
+	_, sumErr := os.Stat(sumPath)
+	if os.IsNotExist(cfgErr) && os.IsNotExist(sumErr) {
+		return nil, false, nil
+	}
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil || len(raw) == 0 {
+		return nil, true, fmt.Errorf(".sen/config.json missing or empty while signature exists (tampering detected)")
+	}
+	sumBytes, sErr := os.ReadFile(sumPath)
+	if sErr != nil {
+		return nil, true, fmt.Errorf(".sen/config.sha256 missing (tampering detected)")
+	}
+	sum := sha256.Sum256(raw)
+	if strings.TrimSpace(string(sumBytes)) != hex.EncodeToString(sum[:]) {
+		return nil, true, fmt.Errorf(".sen/config.json integrity hash mismatch (tampering detected)")
+	}
+	var cfg runtimeConfigView
+	if jErr := json.Unmarshal(raw, &cfg); jErr != nil {
+		return nil, true, fmt.Errorf("invalid .sen/config.json: %w", jErr)
+	}
+	return &cfg, true, nil
+}
+
+// ReadVerifiedRuntimeConfig đọc .sen/config.json và đối chiếu chữ ký .sen/config.sha256 để chống Agent sửa/xóa trộm cấu hình.
 func ReadVerifiedRuntimeConfig(root string) (bool, string, bool) {
 	defaultProf := workspace.DetectDomainProfile(root)
 	if strings.TrimSpace(root) == "" {
 		return false, defaultProf, false
 	}
-	cfgPath := filepath.Join(root, ".sen", "config.json")
-	raw, err := os.ReadFile(cfgPath)
-	if err != nil || len(raw) == 0 {
+	cfg, exists, err := verifyExistingSignedConfig(root)
+	if err != nil {
+		return false, defaultProf, true
+	}
+	if !exists || cfg == nil {
 		return false, defaultProf, false
-	}
-	sumBytes, sErr := os.ReadFile(filepath.Join(root, ".sen", "config.sha256"))
-	if sErr != nil {
-		return false, defaultProf, true
-	}
-	sum := sha256.Sum256(raw)
-	actualHex := hex.EncodeToString(sum[:])
-	if strings.TrimSpace(string(sumBytes)) != actualHex {
-		return false, defaultProf, true
-	}
-	var cfg runtimeConfigView
-	if jErr := json.Unmarshal(raw, &cfg); jErr != nil {
-		return false, defaultProf, true
 	}
 	return cfg.ExpressMode, workspace.ResolveDomainProfile(root, cfg.DomainProfile), false
 }
 
-// WriteSignedRuntimeConfig cập nhật express_mode và domain_profile vào .sen/config.json kèm chữ ký SHA-256 hợp lệ.
+// WriteSignedRuntimeConfig cập nhật express_mode và domain_profile vào .sen/config.json (không kế thừa dữ liệu từ tệp cấu hình bị sửa trộm).
 func WriteSignedRuntimeConfig(root string, expressMode bool, domainProfile string) error {
-	cfgPath := filepath.Join(root, ".sen", "config.json")
+	existing, hasExisting, err := verifyExistingSignedConfig(root)
 	cfg := runtimeConfigView{
-		Version:        "1.1",
+		Version:        "1.2",
 		TimeoutSeconds: 120,
 		DomainProfile:  "auto",
 	}
-	if raw, err := os.ReadFile(cfgPath); err == nil && len(raw) > 0 {
-		_ = json.Unmarshal(raw, &cfg)
+	if err == nil && hasExisting && existing != nil {
+		cfg = *existing
+	} else if st, oErr := storage.Open(filepath.Join(root, ".sen", "state.db")); oErr == nil {
+		if proj, _ := st.GetSSDSProject(); proj != nil {
+			cfg.ProjectID = proj.ProjectID
+			cfg.SSDSVersion = proj.AppliedSSDSVersion
+		}
+		_ = st.Close()
 	}
-	cfg.Version = "1.1"
+	if cfg.Version == "" || cfg.Version == "1.0" || cfg.Version == "1.1" {
+		cfg.Version = "1.2"
+	}
 	cfg.ExpressMode = expressMode
 	if strings.TrimSpace(domainProfile) != "" {
 		cfg.DomainProfile = strings.ToLower(strings.TrimSpace(domainProfile))
 	}
+	return writeAndSignConfigView(root, cfg)
+}
+
+// WriteSignedSSDSConfig cập nhật project_id và ssds_version vào .sen/config.json (không kế thừa dữ liệu từ tệp cấu hình bị sửa trộm).
+func WriteSignedSSDSConfig(root, projectID, ssdsVersion string, expressMode *bool) error {
+	existing, hasExisting, err := verifyExistingSignedConfig(root)
+	cfg := runtimeConfigView{
+		Version:        "1.2",
+		TimeoutSeconds: 120,
+		DomainProfile:  "auto",
+	}
+	if err == nil && hasExisting && existing != nil {
+		cfg = *existing
+	}
+	cfg.Version = "1.2"
+	if strings.TrimSpace(projectID) != "" {
+		cfg.ProjectID = strings.TrimSpace(projectID)
+	}
+	if strings.TrimSpace(ssdsVersion) != "" {
+		cfg.SSDSVersion = strings.TrimSpace(ssdsVersion)
+	}
+	if expressMode != nil {
+		cfg.ExpressMode = *expressMode
+	}
+	return writeAndSignConfigView(root, cfg)
+}
+
+// writeAndSignConfigView ghi tệp .sen/config.json và xuất chữ ký .sen/config.sha256 tương ứng.
+func writeAndSignConfigView(root string, cfg runtimeConfigView) error {
+	cfgPath := filepath.Join(root, ".sen", "config.json")
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		return err
 	}
@@ -204,6 +262,22 @@ func FormatBrief(st *storage.Store, root, activePath string) string {
 		return b.String()
 	}
 
+	if proj, _ := st.GetSSDSProject(); proj != nil {
+		phStatus := "IN_PROGRESS"
+		primaryRole := "Technical Lead"
+		if ph, pErr := st.GetSSDSPhase(proj.CurrentPhase); pErr == nil && ph != nil {
+			phStatus = ph.Status
+			primaryRole = ph.PrimaryRole
+		}
+		fmt.Fprintf(&b, "[SSDS v%s | cat=%s | wf=%s | phase=%s:%s | role=%s]\n",
+			proj.AppliedSSDSVersion, proj.Category, proj.WorkflowTier, proj.CurrentPhase, phStatus, primaryRole)
+		latestVer := ssds.LatestAvailableVersion()
+		if ssds.CompareSemver(latestVer, proj.AppliedSSDSVersion) > 0 {
+			fmt.Fprintf(&b, "ssds_notice: pinned v%s (v%s available — run 'sen sdlc version --check %s')\n",
+				proj.AppliedSSDSVersion, latestVer, latestVer)
+		}
+	}
+
 	verifiedTasks := appendTaskBriefWarnings(&b, st, root)
 	rules, _ := st.ListRules()
 	if len(rules) > 0 {
@@ -232,12 +306,16 @@ func FormatBrief(st *storage.Store, root, activePath string) string {
 	return b.String()
 }
 
-// appendTaskBriefWarnings ghi cảnh báo task OPEN bị gián đoạn hoặc chạm ngưỡng cách ly QUARANTINE (3/3 failed verifies).
+// appendTaskBriefWarnings ghi cảnh báo task OPEN bị gián đoạn, trạng thái QUARANTINE (3/3) và gợi ý task kế tiếp.
 func appendTaskBriefWarnings(b *strings.Builder, st *storage.Store, root string) map[string]bool {
 	verified := make(map[string]bool)
 	tasks, _ := st.ListTasks()
+	nextTask := ""
 	for _, t := range tasks {
 		if t.Status == "OPEN" {
+			if nextTask == "" {
+				nextTask = fmt.Sprintf("%s (%s)", t.ID, t.Title)
+			}
 			failed, _ := workspace.ActiveFailedVerifyCount(st, root, t.ID)
 			if failed >= workspace.MaxRepairRounds {
 				b.WriteString(fmt.Sprintf(
@@ -250,12 +328,17 @@ func appendTaskBriefWarnings(b *strings.Builder, st *storage.Store, root string)
 					t.ID, t.Kind, t.RiskAuto, t.ID, t.ID,
 				))
 			}
+		} else if t.Status != "UNDONE" && t.Status != "VERIFIED" && nextTask == "" {
+			nextTask = fmt.Sprintf("%s (%s)", t.ID, t.Title)
 		}
 		if t.Status == "VERIFIED" {
 			for _, r := range t.ReqIDs {
 				verified[r] = true
 			}
 		}
+	}
+	if nextTask != "" {
+		fmt.Fprintf(b, "next_task: %s\n", nextTask)
 	}
 	return verified
 }

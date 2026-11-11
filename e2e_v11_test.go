@@ -305,8 +305,9 @@ func TestV11_DocsDomainCompanionAutoInstallForkFallbackAndUpdate(t *testing.T) {
 	}
 	defer st.Close()
 	tables, err := st.UserTableNames()
-	if err != nil || !reflect.DeepEqual(tables, []string{"evidence", "requirements", "rules", "snapshots", "tasks"}) {
-		t.Fatalf("expected exact 5 frozen SQLite tables, got %v (err=%v)", tables, err)
+	wantTables := []string{"evidence", "requirements", "rules", "snapshots", "ssds_governance", "ssds_phases", "ssds_project", "tasks"}
+	if err != nil || !reflect.DeepEqual(tables, wantTables) {
+		t.Fatalf("expected exact 8 canonical SQLite tables, got %v (err=%v)", tables, err)
 	}
 }
 

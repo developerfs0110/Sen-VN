@@ -2,6 +2,15 @@
 
 All notable changes to **Sen-VN** are documented in this file.
 
+## [1.2.0] - 2026-11-11
+
+### Added
+- **Native `SEN-STD-SDLC-001` (`SSDS v1.0.0`) Engine (`internal/ssds` & 9th Command `sen sdlc`):** Compiled all 7 Parts / 28 Sections of the SEN Software Development Standard into a deterministic Go engine (`classify`, `status`, `gate`, `review`, `approve`, `impact`, `exception`, `sync`, `version`) backed by 3 normalized SQLite tables (`ssds_project`, `ssds_phases`, `ssds_governance` — 8 WAL tables total).
+- **Zero-Prompt Automatic Activation & Pre-Execution Write Firewall (`internal/bridge`):** `PreInvocation` auto-detects bilingual Vietnamese/English software requests (even in uninitialized folders), runs Brownfield Repo Audits (§2.3), bootstraps adaptive `WF_MICRO | WF_STANDARD | WF_CRITICAL` lifecycles, and injects the mandatory `[SSDS v1.0.0 — Đã kích hoạt tự động]` Workflow Declaration banner, while `PreToolUse` and `sen begin` physically block premature code writes in `P0..P3`.
+- **27 Engineering Roles, Honest Review, 6-Link Traceability, CIA & Time-Bounded Exceptions:** Enforced `author_role != reviewer_role`, automatic `INDEPENDENT_AI_REVIEW -> SELF_REVIEW` downgrade disclosure without an independent `--ref`, SHA-256 baseline locking on approved `P1`/`P2` docs requiring 10-dimension `CIA-*` records (§17), 6-link `docs/traceability-matrix.md` verification (§16), anti-fake-PASS QA checks (§11/§20), `WF_CRITICAL` `force_ask` brakes even under `--express` (§21), and `EXC-*` expiration gates (§27).
+- **Multi-Project Isolation & Independent SSDS Standard Versioning:** Added target-path nearest-project resolution (`workspace.ResolveNearestProjectRoot`), CLI `--project <dir>`, subproject crossing prevention (`CheckNoSubprojectCrossing`), per-project SHA-256-signed `ssds_version` pinning preserved across `sen init` / `--express`, read-only `--check`, user-approved `--upgrade`, and instant `--rollback`.
+- **Global Antigravity Hook Installer Merge:** Updated `scripts/install-sen.ps1` (`-ConfigureHooks`) and `scripts/install-sen.sh` (`--no-hooks`) to merge `"sen-vn"` lifecycle hooks cleanly into `~/.gemini/config/hooks.json` without overwriting other user hooks.
+
 ## [1.1.0] - 2026-11-11
 
 ### Added

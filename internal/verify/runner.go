@@ -153,6 +153,11 @@ func finalizeTaskVerification(
 		return nil, err
 	}
 	if policyErr != nil || res.rawExitCode != 0 || res.execErr != nil {
+		failState := "EXECUTED"
+		if strings.EqualFold(res.strength, "TEST") {
+			failState = "TESTED"
+		}
+		_ = st.UpdateTaskExecutionState(task.ID, failState, "FAIL", "OPEN")
 		retErr := policyErr
 		if retErr == nil {
 			retErr = fmt.Errorf("verification failed (exit %d): %s", res.rawExitCode, res.commandLine)
@@ -166,7 +171,11 @@ func finalizeTaskVerification(
 	if err := workspace.AdvanceBaseline(st, root, task.ScopeFiles); err != nil {
 		return ev, fmt.Errorf("advance baseline: %w", err)
 	}
-	if err := st.UpdateTaskStatus(task.ID, "VERIFIED"); err != nil {
+	passState := "EXECUTED"
+	if strings.EqualFold(res.strength, "TEST") && res.testsRan > 0 {
+		passState = "VERIFIED"
+	}
+	if err := st.UpdateTaskExecutionState(task.ID, passState, "PASS", "VERIFIED"); err != nil {
 		return ev, err
 	}
 	workspace.ClearQuarantineReset(root, task.ID)

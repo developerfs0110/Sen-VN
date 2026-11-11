@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Trình cài đặt và cập nhật CLI `sen` v1.1.0 cho macOS và Linux kèm xác thực SHA-256 qua HTTPS (UTF-8 không BOM, chuẩn LF).
+# Trình cài đặt và cập nhật CLI `sen` v1.2.0 + SSDS v1.0.0 cho macOS và Linux kèm xác thực SHA-256 qua HTTPS (UTF-8 không BOM, chuẩn LF).
 set -eu
 
 REPO="developerfs0110/Sen-VN"
@@ -10,6 +10,8 @@ WORKSPACE=""
 PACKS=""
 SKIP_COMPANIONS="0"
 UPDATE_MODE="0"
+CONFIGURE_HOOKS="1"
+HOOKS_CONFIG="${HOME}/.gemini/config/hooks.json"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -21,6 +23,8 @@ while [ "$#" -gt 0 ]; do
         --packs)           PACKS="$2"; shift 2 ;;
         --skip-companions) SKIP_COMPANIONS="1"; shift 1 ;;
         --update)          UPDATE_MODE="1"; shift 1 ;;
+        --no-hooks)        CONFIGURE_HOOKS="0"; shift 1 ;;
+        --hooks-config)    HOOKS_CONFIG="$2"; shift 2 ;;
         *) echo "Unknown flag: $1" >&2; exit 1 ;;
     esac
 done
@@ -52,6 +56,70 @@ compute_sha256() {
     else
         shasum -a 256 "$1" | awk '{ print tolower($1) }'
     fi
+}
+
+# Hợp nhất khóa "sen-vn" vào ~/.gemini/config/hooks.json mà không xóa các khóa hook sẵn có khác.
+merge_antigravity_hooks() {
+    cfg_path="$1"
+    sen_exe="$2"
+    mkdir -p "$(dirname "$cfg_path")"
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$cfg_path" "$sen_exe" <<'PY'
+import json, os, sys
+cfg_path, sen_exe = sys.argv[1], sys.argv[2]
+data = {}
+if os.path.isfile(cfg_path):
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+            if raw:
+                data = json.loads(raw)
+    except Exception:
+        data = {}
+q = f'"{sen_exe}"' if " " in sen_exe else sen_exe
+data.pop("sen-mvp", None)
+data["sen-vn"] = {
+    "SessionStart": [{"type": "command", "command": f"{q} brief --hook SessionStart"}],
+    "PreInvocation": [{"type": "command", "command": f"{q} brief --hook PreInvocation"}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": f"{q} brief --hook PreToolUse"}]}],
+    "Stop": [{"type": "command", "command": f"{q} brief --hook Stop"}],
+}
+with open(cfg_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+    elif command -v jq >/dev/null 2>&1 && [ -f "$cfg_path" ]; then
+        tmp_json="$(mktemp)"
+        case "$sen_exe" in
+            *" "*) bin_cmd="\"$sen_exe\"" ;;
+            *)     bin_cmd="$sen_exe" ;;
+        esac
+        jq --arg bin "$bin_cmd" 'del(.["sen-mvp"]) | .["sen-vn"] = {
+          "SessionStart": [{"type":"command","command":($bin + " brief --hook SessionStart")}],
+          "PreInvocation": [{"type":"command","command":($bin + " brief --hook PreInvocation")}],
+          "PreToolUse": [{"matcher":"*","hooks":[{"type":"command","command":($bin + " brief --hook PreToolUse")}]}],
+          "Stop": [{"type":"command","command":($bin + " brief --hook Stop")}]
+        }' "$cfg_path" > "$tmp_json" && mv "$tmp_json" "$cfg_path"
+    elif [ ! -f "$cfg_path" ]; then
+        case "$sen_exe" in
+            *" "*) bin_cmd="\"$sen_exe\"" ;;
+            *)     bin_cmd="$sen_exe" ;;
+        esac
+        cat > "$cfg_path" <<EOF
+{
+  "sen-vn": {
+    "SessionStart": [{"type": "command", "command": "$bin_cmd brief --hook SessionStart"}],
+    "PreInvocation": [{"type": "command", "command": "$bin_cmd brief --hook PreInvocation"}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "$bin_cmd brief --hook PreToolUse"}]}],
+    "Stop": [{"type": "command", "command": "$bin_cmd brief --hook Stop"}]
+  }
+}
+EOF
+    else
+        echo "WARNING: Could not merge 'sen-vn' into existing $cfg_path (neither python3 nor jq is installed); existing file left untouched." >&2
+        return 0
+    fi
+    echo "Registered Antigravity lifecycle hooks ('sen-vn') in: $cfg_path"
 }
 
 if [ -z "$SOURCE" ]; then
@@ -99,6 +167,10 @@ fi
 cp "$SRC_FILE" "$INSTALL_DIR/sen"
 chmod +x "$INSTALL_DIR/sen"
 echo "Installed sen successfully at: $INSTALL_DIR/sen"
+
+if [ "$CONFIGURE_HOOKS" = "1" ] && [ -n "$HOOKS_CONFIG" ]; then
+    merge_antigravity_hooks "$HOOKS_CONFIG" "$INSTALL_DIR/sen"
+fi
 
 # Khởi tạo hoặc đồng bộ ngay không gian làm việc cùng các gói kỹ năng nếu người dùng chỉ định --workspace.
 if [ -n "$WORKSPACE" ]; then
