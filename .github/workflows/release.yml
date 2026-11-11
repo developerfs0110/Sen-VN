@@ -59,3 +59,4 @@ jobs:
             dist-release/sen-linux-amd64
             dist-release/sen-linux-arm64
             dist-release/checksums.txt
+

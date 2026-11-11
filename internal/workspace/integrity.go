@@ -17,8 +17,8 @@ func snapshotDrifted(sn storage.Snapshot, cur storage.Snapshot) bool {
 	return sn.OrigSHA256 != cur.OrigSHA256
 }
 
-// taskAllowsDelete kiểm tra xem task hiện tại có được mở kèm cờ cho phép xóa tệp (--allow-delete) hay không.
-func taskAllowsDelete(root, taskID string) bool {
+// TaskAllowsDelete kiểm tra xem task hiện tại có được mở kèm cờ cho phép xóa tệp (--allow-delete) hay không.
+func TaskAllowsDelete(root, taskID string) bool {
 	if taskID == "" {
 		return false
 	}
@@ -26,7 +26,7 @@ func taskAllowsDelete(root, taskID string) bool {
 	return err == nil
 }
 
-// CheckIntegrity đảm bảo không có tệp test bị khóa nào bị sửa đổi và không có tệp ngoài phạm vi bị thêm/sửa/xóa lén.
+// CheckIntegrity đảm bảo không có tệp test/raw bị khóa nào bị sửa đổi và không có tệp ngoài phạm vi bị thêm/sửa/xóa lén.
 func CheckIntegrity(st *storage.Store, root, taskID string, scopeFiles []string) error {
 	if taskID != "" {
 		if err := ValidateTaskID(taskID); err != nil {
@@ -75,21 +75,21 @@ func CheckIntegrity(st *storage.Store, root, taskID string, scopeFiles []string)
 	}
 
 	// Phát hiện hành vi xóa tệp ngoài phạm vi hoặc xóa tệp trong phạm vi khi chưa khai báo --allow-delete.
-	allowDel := taskAllowsDelete(root, taskID)
+	allowDel := TaskAllowsDelete(root, taskID)
 	for key, base := range baseByKey {
 		if _, exists := currentByKey[key]; !exists {
 			if !allowedKeys[key] {
 				return fmt.Errorf("out-of-scope file deleted: %s", base.RelPath)
 			}
 			if !allowDel {
-				return fmt.Errorf("scoped file %q deleted without --allow-delete (HIGH risk)", base.RelPath)
+				return fmt.Errorf("scoped file %q deleted without --allow-delete (LARGE risk)", base.RelPath)
 			}
 		}
 	}
 	return nil
 }
 
-// verifyLockedTestsUntouched kiểm tra toàn bộ tệp kiểm thử bị khóa trong cả __BASELINE__ và snapshot của task hiện hành.
+// verifyLockedTestsUntouched kiểm tra toàn bộ tệp kiểm thử và tư liệu gốc bị khóa trong cả __BASELINE__ và snapshot của task.
 func verifyLockedTestsUntouched(st *storage.Store, taskID string, currentByKey map[string]storage.Snapshot) error {
 	checkIDs := []string{BaselineTaskID}
 	if taskID != "" {
@@ -106,9 +106,15 @@ func verifyLockedTestsUntouched(st *storage.Store, taskID string, currentByKey m
 			}
 			cur, exists := currentByKey[PathKey(sn.RelPath)]
 			if !exists {
+				if IsLockedRawMedia(sn.RelPath) {
+					return fmt.Errorf("locked raw/master media file deleted: %s", sn.RelPath)
+				}
 				return fmt.Errorf("locked test file deleted: %s", sn.RelPath)
 			}
 			if snapshotDrifted(sn, cur) {
+				if IsLockedRawMedia(sn.RelPath) {
+					return fmt.Errorf("locked raw/master media file modified: %s", sn.RelPath)
+				}
 				return fmt.Errorf("locked test file modified: %s", sn.RelPath)
 			}
 		}
@@ -145,6 +151,7 @@ func UndoTask(st *storage.Store, root, taskID string) ([]string, error) {
 	if err := st.UpdateTaskStatus(taskID, "UNDONE"); err != nil {
 		return restored, err
 	}
+	ClearQuarantineReset(root, taskID)
 	return restored, nil
 }
 

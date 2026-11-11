@@ -16,7 +16,7 @@ import (
 	"github.com/developerfs0110/Sen-VN/internal/workspace"
 )
 
-// cmdVerify kiểm tra tính toàn vẹn phạm vi tệp, chạy trực tiếp binary kiểm thử và ghi bằng chứng băm nối chuỗi.
+// cmdVerify kiểm tra tính toàn vẹn phạm vi tệp, giới hạn <= 3 vòng sửa lỗi, chạy binary kiểm thử và ghi bằng chứng băm nối chuỗi.
 func cmdVerify(cwd string, args []string, stdout io.Writer) error {
 	root := resolveProjectRoot(cwd)
 	st, err := openExistingStore(root)
@@ -48,7 +48,7 @@ func cmdVerify(cwd string, args []string, stdout io.Writer) error {
 	return nil
 }
 
-// cmdUndo khôi phục chính xác từng byte cho task đang OPEN từ bản sao lưu snapshot và dọn tệp mới tạo.
+// cmdUndo khôi phục chính xác từng byte cho task đang OPEN từ bản sao lưu snapshot và xóa cờ cách ly Quarantine.
 func cmdUndo(cwd string, args []string, stdout io.Writer) error {
 	root := resolveProjectRoot(cwd)
 	st, err := openExistingStore(root)
@@ -61,7 +61,6 @@ func cmdUndo(cwd string, args []string, stdout io.Writer) error {
 	if len(args) > 0 {
 		taskID = strings.TrimSpace(args[0])
 	}
-	// Nếu không chỉ định mã task, tự động tìm task đang ở trạng thái OPEN để hoàn tác.
 	if taskID == "" {
 		tasks, err := st.ListTasks()
 		if err != nil {
@@ -87,7 +86,7 @@ func cmdUndo(cwd string, args []string, stdout io.Writer) error {
 	return nil
 }
 
-// cmdDone thực thi cổng nghiệm thu 5 bước và xuất báo cáo bàn giao .sen/delivery-report.md khi đạt 100% yêu cầu.
+// cmdDone thực thi cổng nghiệm thu 5 bước đa chuyên ngành và xuất báo cáo bàn giao .sen/delivery-report.md nâng cao.
 func cmdDone(cwd string, args []string, stdout io.Writer) error {
 	root := resolveProjectRoot(cwd)
 	st, err := openExistingStore(root)
@@ -104,8 +103,14 @@ func cmdDone(cwd string, args []string, stdout io.Writer) error {
 	if len(suiteArgs) == 0 {
 		suiteArgs = cfg.ProjectVerifyCmd
 	}
-	report, err := verify.EvaluateDoneGate(
-		context.Background(), st, root, cfg.AllowedBinaries, suiteArgs, time.Duration(cfg.TimeoutSeconds)*time.Second,
+	opts := verify.DoneOptions{
+		Version:       workspace.CurrentVersion,
+		DomainProfile: workspace.ResolveDomainProfile(root, cfg.DomainProfile),
+		ExpressMode:   cfg.ExpressMode,
+		Companions:    bridge.DetectCompanions(root).FormatCompact(),
+	}
+	report, err := verify.EvaluateDoneGateWithOpts(
+		context.Background(), st, root, cfg.AllowedBinaries, suiteArgs, time.Duration(cfg.TimeoutSeconds)*time.Second, opts,
 	)
 	if err != nil {
 		return err
@@ -114,7 +119,7 @@ func cmdDone(cwd string, args []string, stdout io.Writer) error {
 	return nil
 }
 
-// cmdStatus hiển thị tổng quan luật dự án, kỹ năng đồng hành, yêu cầu, các task và trạng thái chuỗi băm bằng chứng.
+// cmdStatus hiển thị tổng quan chuyên ngành, chế độ tự hành, luật, yêu cầu, task, Quarantine và mở khóa khi có --approve.
 func cmdStatus(cwd string, args []string, stdout io.Writer) error {
 	root := resolveProjectRoot(cwd)
 	st, err := openExistingStore(root)
@@ -125,16 +130,53 @@ func cmdStatus(cwd string, args []string, stdout io.Writer) error {
 
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	approve := fs.Bool("approve", false, "approve all pending requirements")
+	approve := fs.Bool("approve", false, "approve all pending requirements and unlock quarantined OPEN tasks")
+	express := fs.Bool("express", false, "toggle autonomous express mode")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := applyExpressFlagIfVisited(root, fs, *express); err != nil {
+		return err
+	}
+	cfg, err := loadConfig(root)
+	if err != nil {
+		return err
+	}
 	if *approve {
-		if err := st.ApproveAllRequirements(); err != nil {
+		if err := approveAndUnlockQuarantine(st, root, stdout); err != nil {
 			return err
 		}
 	}
+	renderStatusOverview(st, root, cfg, stdout)
+	return nil
+}
 
+// approveAndUnlockQuarantine phê duyệt toàn bộ yêu cầu đang chờ và đặt lại bộ đếm vòng lặp sửa lỗi cho các task OPEN bị kẹt.
+func approveAndUnlockQuarantine(st *storage.Store, root string, stdout io.Writer) error {
+	if err := st.ApproveAllRequirements(); err != nil {
+		return err
+	}
+	tasks, err := st.ListTasks()
+	if err != nil {
+		return err
+	}
+	for _, t := range tasks {
+		if t.Status != "OPEN" {
+			continue
+		}
+		failed, _ := workspace.ActiveFailedVerifyCount(st, root, t.ID)
+		if failed > 0 {
+			if err := workspace.WriteQuarantineReset(st, root, t.ID); err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "Unlocked repair loop for task %s (previous failed verifies=%d)\n", t.ID, failed)
+		}
+	}
+	return nil
+}
+
+// renderStatusOverview in bảng trạng thái chi tiết của dự án ra luồng stdout.
+func renderStatusOverview(st *storage.Store, root string, cfg Config, stdout io.Writer) {
 	rules, _ := st.ListRules()
 	reqs, _ := st.ListRequirements()
 	tasks, _ := st.ListTasks()
@@ -144,10 +186,15 @@ func cmdStatus(cwd string, args []string, stdout io.Writer) error {
 		chainStatus = "TAMPERED (" + err.Error() + ")"
 	}
 	comp := bridge.DetectCompanions(root)
+	prof := workspace.ResolveDomainProfile(root, cfg.DomainProfile)
+	expLabel := "off"
+	if cfg.ExpressMode {
+		expLabel = "on"
+	}
 
 	fmt.Fprintf(stdout, "=== SEN STATUS ===\n")
-	fmt.Fprintf(stdout, "Rules: %d/%d | Companions: %s | Evidence: %d (%s)\n",
-		len(rules), storage.MaxRules, comp.FormatCompact(), len(evs), chainStatus)
+	fmt.Fprintf(stdout, "Profile: %s | Express: %s | Rules: %d/%d | Companions: %s | Evidence: %d (%s)\n",
+		prof, expLabel, len(rules), storage.MaxRules, comp.FormatCompact(), len(evs), chainStatus)
 	fmt.Fprintln(stdout, "\nRequirements:")
 	for _, r := range reqs {
 		state := "PENDING"
@@ -158,8 +205,13 @@ func cmdStatus(cwd string, args []string, stdout io.Writer) error {
 	}
 	fmt.Fprintln(stdout, "\nTasks:")
 	for _, t := range tasks {
-		fmt.Fprintf(stdout, "  [%s] %s (kind=%s risk=%s reqs=%v files=%v)\n",
-			t.Status, t.ID, t.Kind, t.RiskAuto, t.ReqIDs, t.ScopeFiles)
+		qTag := ""
+		if t.Status == "OPEN" {
+			if failed, _ := workspace.ActiveFailedVerifyCount(st, root, t.ID); failed >= workspace.MaxRepairRounds {
+				qTag = " [QUARANTINE 3/3]"
+			}
+		}
+		fmt.Fprintf(stdout, "  [%s]%s %s (kind=%s risk=%s reqs=%v files=%v)\n",
+			t.Status, qTag, t.ID, t.Kind, t.RiskAuto, t.ReqIDs, t.ScopeFiles)
 	}
-	return nil
 }

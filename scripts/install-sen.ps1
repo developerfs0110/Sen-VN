@@ -1,10 +1,10 @@
 ﻿<#
 .SYNOPSIS
-    Trình cài đặt `sen.exe` an toàn cho Windows (không cần quyền Quản trị viên / UAC).
+    Trình cài đặt và cập nhật `sen.exe` v1.1.0 an toàn cho Windows (không cần quyền Quản trị viên / UAC).
 .DESCRIPTION
-    Cài đặt `sen.exe` vào `%LOCALAPPDATA%\Programs\sen\bin`, tự động tải và xác thực SHA-256 từ GitHub Releases (`-Repo`),
-    từ chối giao thức HTTP không mã hóa, bắt buộc kiểm tra SHA-256 khi tải trực tiếp qua HTTPS,
-    gỡ cảnh báo SmartScreen bằng `Unblock-File` và cập nhật biến môi trường PATH của người dùng.
+    Cài đặt hoặc cập nhật (`-Update`) `sen.exe` vào `%LOCALAPPDATA%\Programs\sen\bin`, xác thực chữ ký SHA-256,
+    chặn giao thức HTTP không mã hóa, cập nhật User PATH và tùy chọn khởi tạo ngay không gian làm việc (`-Workspace`)
+    kèm bộ kỹ năng đồng hành mặc định và các gói mở rộng (`-Packs`).
 #>
 [CmdletBinding()]
 param(
@@ -22,6 +22,18 @@ param(
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "Programs\sen\bin"),
 
     [Parameter(Mandatory = $false)]
+    [string]$Workspace = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$Packs = "",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SkipCompanions,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Update,
+
+    [Parameter(Mandatory = $false)]
     [switch]$SkipUserPath
 )
 
@@ -29,9 +41,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-# Nếu chạy từ bản clone cục bộ đã biên dịch sẵn `sen.exe` và không truyền `-Repo`, ưu tiên dùng tệp nội bộ.
+# Nếu chạy từ bản clone cục bộ đã biên dịch sẵn `sen.exe` (không truyền `-Repo` và không bật `-Update`), ưu tiên dùng tệp nội bộ.
 $explicitSource = $PSBoundParameters.ContainsKey("BinarySource") -and (-not [string]::IsNullOrWhiteSpace($BinarySource))
-if (-not $explicitSource) {
+if (-not $explicitSource -and (-not $Update)) {
     $defaultLocal = Join-Path $PSScriptRoot "..\sen.exe"
     if (-not $PSBoundParameters.ContainsKey("Repo") -and (Test-Path -LiteralPath $defaultLocal)) {
         $BinarySource = $defaultLocal
@@ -120,6 +132,31 @@ try {
         }
     }
     Write-Host "Installed sen.exe successfully at: $targetExe"
+
+    # Khởi tạo hoặc cập nhật ngay không gian làm việc và gói kỹ năng nếu truyền tham số -Workspace.
+    if (-not [string]::IsNullOrWhiteSpace($Workspace)) {
+        if (-not (Test-Path -LiteralPath $Workspace)) {
+            New-Item -ItemType Directory -Path $Workspace -Force | Out-Null
+        }
+        $wsPath = (Resolve-Path -LiteralPath $Workspace).Path
+        $initArgs = @("init")
+        if ($Update -and (Test-Path -LiteralPath (Join-Path $wsPath ".sen\state.db")) -and [string]::IsNullOrWhiteSpace($Packs)) {
+            $initArgs += "--update"
+        } else {
+            if (-not $SkipCompanions) { $initArgs += "--install-companions" }
+            if (-not [string]::IsNullOrWhiteSpace($Packs)) { $initArgs += @("--packs", $Packs) }
+            if ($Update) { $initArgs += "--update" }
+        }
+        Push-Location -LiteralPath $wsPath
+        try {
+            & $targetExe @initArgs
+            if ($LASTEXITCODE -ne 0) {
+                throw "Workspace command 'sen $($initArgs -join ' ')' failed with exit code $LASTEXITCODE."
+            }
+        } finally {
+            Pop-Location
+        }
+    }
 } finally {
     if ($null -ne $tempDownload -and (Test-Path -LiteralPath $tempDownload)) { Remove-Item -LiteralPath $tempDownload -Force -ErrorAction SilentlyContinue }
     if ($null -ne $tempChecksums -and (Test-Path -LiteralPath $tempChecksums)) { Remove-Item -LiteralPath $tempChecksums -Force -ErrorAction SilentlyContinue }

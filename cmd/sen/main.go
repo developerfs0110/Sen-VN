@@ -1,10 +1,11 @@
-// Package main cung cấp điểm vào CLI của Sen MVP với đúng 8 lệnh cố định (Scope Freeze).
+// Package main cung cấp điểm vào CLI của Sen-VN v1.1.0 với đúng 8 lệnh cố định (Scope Freeze).
 package main
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -13,14 +14,17 @@ import (
 
 	"github.com/developerfs0110/Sen-VN/internal/storage"
 	"github.com/developerfs0110/Sen-VN/internal/verify"
+	"github.com/developerfs0110/Sen-VN/internal/workspace"
 )
 
-// Config lưu trữ cấu hình kiểm chứng tại .sen/config.json của từng workspace.
+// Config lưu trữ cấu hình kiểm chứng, chế độ tự hành và chuyên ngành tại .sen/config.json của từng workspace.
 type Config struct {
 	Version          string   `json:"version"`
 	AllowedBinaries  []string `json:"allowed_binaries"`
 	ProjectVerifyCmd []string `json:"project_verify_cmd"`
 	TimeoutSeconds   int      `json:"timeout_seconds"`
+	ExpressMode      bool     `json:"express_mode"`
+	DomainProfile    string   `json:"domain_profile"`
 }
 
 // main khởi chạy CLI dựa trên thư mục làm việc hiện tại và trả mã thoát chuẩn cho hệ điều hành.
@@ -33,23 +37,23 @@ func main() {
 	os.Exit(RunInDir(cwd, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
-// printUsage in bảng hướng dẫn sử dụng đúng 8 lệnh cốt lõi của Sen MVP v1.0.
+// printUsage in bảng hướng dẫn sử dụng đúng 8 lệnh cốt lõi của Sen-VN v1.1.0.
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, `Sen MVP v1.0 — Deterministic AI Coding Referee (8 Commands)
+	fmt.Fprintln(w, `Sen-VN v1.1.0 — Deterministic AI Coding Referee (8 Commands)
 
 Usage:
-  sen init [--with-companions] [--agy-hooks]
+  sen init [--with-companions] [--install-companions] [--packs <list|all|csv>] [--profile <auto|code|web|video|media|docs>] [--express] [--agy-hooks] [--update]
   sen brief [--path <file>] [--hook [event]]
-  sen intake --quote "<raw>" --req "<summary>" [--bugfix] [--security] [--vn-law]
+  sen intake --quote "<raw>" --req "<summary>" [--bugfix] [--security] [--vn-law] [--express]
   sen intake --rule "<text>" [--quote "<raw>"] [--glob "*"] [--replace <id>] [--delete <id>]
-  sen begin <task_id> --reqs R1,R2 --files f1,f2 [--kind feature|bugfix|ui] [--allow-delete] [--title "..."]
+  sen begin <task_id> --reqs R1,R2 --files f1,f2 [--kind feature|bugfix|ui] [--allow-delete] [--express] [--title "..."]
   sen verify <task_id> -- <bin> [args...]
   sen undo [task_id]
   sen done [-- <suite_bin> <args...>]
-  sen status [--approve]`)
+  sen status [--approve] [--express]`)
 }
 
-// RunInDir điều phối và thực thi một trong 8 lệnh CLI cấp cao nhất của Sen; từ chối mọi lệnh lạ.
+// RunInDir điều phối và thực thi một trong 8 lệnh CLI cấp cao nhất của Sen-VN; từ chối mọi lệnh lạ.
 func RunInDir(cwd string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		printUsage(stderr)
@@ -109,25 +113,25 @@ func openExistingStore(root string) (*storage.Store, error) {
 	return storage.Open(dbPath)
 }
 
-// loadConfig đọc .sen/config.json và đối chiếu chữ ký SHA-256 trong .sen/config.sha256 để chống sửa trộm.
+// loadConfig đọc .sen/config.json và bắt buộc đối chiếu chữ ký SHA-256 trong .sen/config.sha256 để chống sửa trộm.
 func loadConfig(root string) (Config, error) {
+	resolvedDefault := workspace.ResolveDomainProfile(root, "auto")
 	cfg := Config{
-		Version:          "1.0",
+		Version:          "1.1",
 		AllowedBinaries:  verify.DefaultAllowedBinaries(),
-		ProjectVerifyCmd: detectDefaultVerifyCmd(root),
+		ProjectVerifyCmd: detectDefaultVerifyCmd(root, resolvedDefault),
 		TimeoutSeconds:   120,
+		DomainProfile:    "auto",
 	}
 	cfgPath := filepath.Join(root, ".sen", "config.json")
 	raw, err := os.ReadFile(cfgPath)
 	if err == nil && len(raw) > 0 {
-		// Kiểm tra tính toàn vẹn của config.json trước khi chấp nhận danh sách allowed_binaries.
 		sumPath := filepath.Join(root, ".sen", "config.sha256")
-		if expectedBytes, sErr := os.ReadFile(sumPath); sErr == nil {
-			actual := sha256Hex(raw)
-			if strings.TrimSpace(string(expectedBytes)) != actual {
-				return cfg, fmt.Errorf(".sen/config.json integrity hash mismatch (tampering detected)")
-			}
+		expectedBytes, sErr := os.ReadFile(sumPath)
+		if sErr != nil || strings.TrimSpace(string(expectedBytes)) != sha256Hex(raw) {
+			return cfg, fmt.Errorf(".sen/config.json integrity hash mismatch (tampering detected)")
 		}
+		cfg.ProjectVerifyCmd = nil
 		if jErr := json.Unmarshal(raw, &cfg); jErr != nil {
 			return cfg, fmt.Errorf("invalid .sen/config.json: %w", jErr)
 		}
@@ -137,6 +141,9 @@ func loadConfig(root string) (Config, error) {
 	}
 	if cfg.TimeoutSeconds <= 0 {
 		cfg.TimeoutSeconds = 120
+	}
+	if strings.TrimSpace(cfg.DomainProfile) == "" {
+		cfg.DomainProfile = "auto"
 	}
 	return cfg, nil
 }
@@ -158,14 +165,42 @@ func saveConfig(root string, cfg Config) error {
 	return os.WriteFile(filepath.Join(root, ".sen", "config.sha256"), []byte(sha256Hex(data)+"\n"), 0o644)
 }
 
+// applyExpressFlagIfVisited cập nhật cờ express_mode vào .sen/config.json nếu người dùng truyền tường minh trên CLI.
+func applyExpressFlagIfVisited(root string, fs *flag.FlagSet, val bool) error {
+	if !flagVisited(fs, "express") {
+		return nil
+	}
+	cfg, err := loadConfig(root)
+	if err != nil {
+		return err
+	}
+	cfg.ExpressMode = val
+	return saveConfig(root, cfg)
+}
+
+// flagVisited kiểm tra xem một cờ cụ thể có được truyền tường minh trong danh sách tham số CLI hay không.
+func flagVisited(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
 // sha256Hex tính mã băm SHA-256 dạng chuỗi thập lục phân viết thường cho mảng byte.
 func sha256Hex(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
 
-// detectDefaultVerifyCmd tự động nhận diện lệnh kiểm thử mặc định theo ngôn ngữ của dự án.
-func detectDefaultVerifyCmd(root string) []string {
+// detectDefaultVerifyCmd tự động nhận diện lệnh kiểm thử mặc định theo ngôn ngữ và chuyên ngành của dự án.
+func detectDefaultVerifyCmd(root, resolvedProfile string) []string {
+	switch resolvedProfile {
+	case "docs", "video", "media":
+		return nil
+	}
 	switch {
 	case fileExists(filepath.Join(root, "go.mod")):
 		return []string{"go", "test", "-v", "./..."}

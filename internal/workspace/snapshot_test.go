@@ -29,24 +29,44 @@ func TestComputeRiskDeterministic(t *testing.T) {
 	root := t.TempDir()
 
 	risk, _ := workspace.ComputeRisk([]string{"ui/button.tsx"}, "UI", root)
-	if risk != "LOW" {
-		t.Errorf("expected LOW for single UI file, got %s", risk)
+	if risk != "SMALL" {
+		t.Errorf("expected SMALL for single UI file, got %s", risk)
+	}
+
+	risk, _ = workspace.ComputeRisk([]string{"ui/a.tsx", "ui/b.tsx"}, "FEATURE", root)
+	if risk != "SMALL" {
+		t.Errorf("expected SMALL for 2 feature files in same dir, got %s", risk)
+	}
+
+	risk, _ = workspace.ComputeRisk([]string{"ui/a.tsx", "api/b.ts"}, "FEATURE", root)
+	if risk != "MEDIUM" {
+		t.Errorf("expected MEDIUM for 2 feature files across distinct dirs, got %s", risk)
+	}
+
+	risk, _ = workspace.ComputeRisk([]string{"a.go", "b.go", "c.go"}, "UI", root)
+	if risk != "MEDIUM" {
+		t.Errorf("expected MEDIUM for 3 files, got %s", risk)
 	}
 
 	risk, _ = workspace.ComputeRisk([]string{"ui/button.tsx"}, "BUGFIX", root)
-	if risk != "HIGH" {
-		t.Errorf("expected HIGH for BUGFIX kind, got %s", risk)
+	if risk != "LARGE" {
+		t.Errorf("expected LARGE for BUGFIX kind, got %s", risk)
 	}
 
 	risk, _ = workspace.ComputeRisk([]string{"internal/auth/login.go"}, "FEATURE", root)
-	if risk != "HIGH" {
-		t.Errorf("expected HIGH for auth path, got %s", risk)
+	if risk != "LARGE" {
+		t.Errorf("expected LARGE for auth path, got %s", risk)
+	}
+
+	crit, reason := workspace.IsDestructiveOrCriticalFile(root, ".env.production")
+	if !crit || reason == "" {
+		t.Errorf("expected .env.production classified as critical, got crit=%v reason=%q", crit, reason)
 	}
 
 	many := []string{"a.go", "b.go", "c.go", "d.go", "e.go", "f.go"}
 	risk, _ = workspace.ComputeRisk(many, "FEATURE", root)
-	if risk != "HIGH" {
-		t.Errorf("expected HIGH for >5 files, got %s", risk)
+	if risk != "LARGE" {
+		t.Errorf("expected LARGE for >5 files, got %s", risk)
 	}
 }
 
@@ -319,3 +339,58 @@ func TestSymlinkOrNTFSJunctionEscapeRejected(t *testing.T) {
 		t.Fatalf("expected BeginTaskSnapshot to reject path traversing junction/symlink")
 	}
 }
+
+// TestRawMediaImmutableLockAndDomainProfile kiểm chứng khóa bất biến tư liệu gốc (>10MB) và tự nhận diện DomainProfile.
+func TestRawMediaImmutableLockAndDomainProfile(t *testing.T) {
+	root := t.TempDir()
+	st, err := storage.Open(filepath.Join(root, ".sen", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	bigSize := int64(10*1024*1024 + 128)
+	rawClip := filepath.Join(root, "raw", "clip.mp4")
+	if err := os.MkdirAll(filepath.Dir(rawClip), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(rawClip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Truncate(bigSize)
+	_ = f.Close()
+	writeTestFile(t, root, "edits/out.srt", []byte("1\n00:00:00,000 --> 00:00:02,000\nXin chào\n"))
+
+	if gotProf := workspace.DetectDomainProfile(root); gotProf != "video" {
+		t.Fatalf("expected video profile for raw/clip.mp4 workspace, got %q", gotProf)
+	}
+	if !workspace.IsLockedRawMedia("raw/clip.mp4") || !workspace.IsLockedRawMedia("assets/raw/take1.mov") {
+		t.Fatalf("expected raw/clip.mp4 and assets/raw/take1.mov to be locked raw media")
+	}
+
+	if err := workspace.CaptureBaseline(st, root); err != nil {
+		t.Fatal(err)
+	}
+	err = workspace.BeginTaskSnapshot(st, root, "T-RAW-BAD", []string{"raw/clip.mp4"})
+	if err == nil || !strings.Contains(err.Error(), "locked (immutable)") {
+		t.Fatalf("expected BeginTaskSnapshot to reject raw/clip.mp4 as immutable, got: %v", err)
+	}
+
+	_ = st.CreateTask(storage.Task{
+		ID: "T-SUB", ReqIDs: []string{"R1"}, Title: "subtitles", Kind: "FEATURE",
+		RiskAuto: "SMALL", ScopeFiles: []string{"edits/out.srt"}, Status: "OPEN",
+	})
+	if err := workspace.BeginTaskSnapshot(st, root, "T-SUB", []string{"edits/out.srt"}); err != nil {
+		t.Fatal(err)
+	}
+	// Thay đổi kích thước tệp >10MB trong raw/ -> CheckIntegrity phải bắt được ngay qua size/mtime_ns!
+	f2, _ := os.OpenFile(rawClip, os.O_WRONLY, 0o644)
+	_ = f2.Truncate(bigSize + 16)
+	_ = f2.Close()
+	err = workspace.CheckIntegrity(st, root, "T-SUB", []string{"edits/out.srt"})
+	if err == nil || !strings.Contains(err.Error(), "raw/clip.mp4") {
+		t.Fatalf("expected CheckIntegrity to detect >10MB raw/clip.mp4 drift, got: %v", err)
+	}
+}
+

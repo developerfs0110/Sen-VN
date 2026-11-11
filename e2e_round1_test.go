@@ -29,8 +29,8 @@ func TestRound1_SecurityRegressionsEndToEnd(t *testing.T) {
 		t.Fatalf("expected invalid --kind rejected, got 0: %s", out)
 	}
 	beginOut := mustSenOK(t, dir, "begin", "T1", "--reqs", "R1", "--files", "a.go,a_test.go", "--kind", "ui")
-	if !strings.Contains(beginOut, "kind=BUGFIX") || !strings.Contains(beginOut, "risk=HIGH") {
-		t.Fatalf("expected --bugfix req to force kind=BUGFIX risk=HIGH, got: %s", beginOut)
+	if !strings.Contains(beginOut, "kind=BUGFIX") || !strings.Contains(beginOut, "risk=LARGE") {
+		t.Fatalf("expected --bugfix req to force kind=BUGFIX risk=LARGE, got: %s", beginOut)
 	}
 
 	// C2: Reject path-qualified %TEMP%\pytest.cmd spoofed binary.

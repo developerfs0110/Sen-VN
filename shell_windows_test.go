@@ -15,3 +15,4 @@ func newHookShellCommand(dir string, shellCommand string) *exec.Cmd {
 	}
 	return cmd
 }
+

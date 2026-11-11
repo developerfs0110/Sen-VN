@@ -80,6 +80,41 @@ func (s *Store) ListEvidence() ([]Evidence, error) {
 	return out, rows.Err()
 }
 
+// CountConsecutiveFailedEvidence đếm số lần verify thất bại liên tiếp gần nhất của taskID tính từ sau lần pass gần nhất.
+func (s *Store) CountConsecutiveFailedEvidence(taskID string) (int, error) {
+	return s.CountConsecutiveFailedEvidenceSince(taskID, 0)
+}
+
+// CountConsecutiveFailedEvidenceSince đếm số bản ghi thất bại liên tiếp của taskID có seq lớn hơn mốc afterSeq.
+func (s *Store) CountConsecutiveFailedEvidenceSince(taskID string, afterSeq int64) (int, error) {
+	rows, err := s.db.Query(`SELECT exit_code FROM evidence WHERE task_id = ? AND seq > ? ORDER BY seq DESC`, taskID, afterSeq)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var code int
+		if err := rows.Scan(&code); err != nil {
+			return 0, err
+		}
+		if code == 0 {
+			break
+		}
+		count++
+	}
+	return count, rows.Err()
+}
+
+// MaxEvidenceSeq trả về chỉ số seq lớn nhất hiện có trong bảng evidence (0 nếu bảng đang trống).
+func (s *Store) MaxEvidenceSeq() (int64, error) {
+	var maxSeq int64
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM evidence`).Scan(&maxSeq); err != nil {
+		return 0, err
+	}
+	return maxSeq, nil
+}
+
 // VerifyEvidenceChain kiểm tra tính liên tục của seq và đối chiếu lại toàn bộ mã băm SHA-256 từ GENESIS.
 func (s *Store) VerifyEvidenceChain() error {
 	list, err := s.ListEvidence()

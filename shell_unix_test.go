@@ -9,3 +9,4 @@ func newHookShellCommand(dir string, shellCommand string) *exec.Cmd {
 	cmd.Dir = dir
 	return cmd
 }
+

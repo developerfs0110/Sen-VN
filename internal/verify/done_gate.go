@@ -1,4 +1,4 @@
-// Tệp done_gate.go thực thi cổng nghiệm thu 5 điều kiện của lệnh sen done và xuất báo cáo .sen/delivery-report.md.
+// Tệp done_gate.go thực thi cổng nghiệm thu 5 điều kiện của lệnh sen done và xuất báo cáo .sen/delivery-report.md nâng cao.
 package verify
 
 import (
@@ -19,12 +19,21 @@ import (
 // FinalGateTaskID định danh bản ghi bằng chứng cho lần chạy bộ kiểm thử tổng thể cuối cùng tại cổng sen done.
 const FinalGateTaskID = "__DONE__"
 
-// DoneRow biểu diễn một dòng đối soát truy vết từ mã yêu cầu R_i tới câu gốc của người dùng và lệnh kiểm chứng đã pass.
+// DoneOptions truyền siêu dữ liệu phiên bản, chuyên ngành, chế độ tự hành và gói đồng hành vào báo cáo nghiệm thu.
+type DoneOptions struct {
+	Version       string
+	DomainProfile string
+	ExpressMode   bool
+	Companions    string
+}
+
+// DoneRow biểu diễn một dòng đối soát truy vết từ mã yêu cầu R_i tới bậc rủi ro và bằng chứng kiểm chứng đã pass.
 type DoneRow struct {
 	ReqID     string
 	UserQuote string
 	Summary   string
 	TaskID    string
+	RiskTier  string
 	Strength  string
 	TestsRan  int
 	Command   string
@@ -38,7 +47,7 @@ type DoneReport struct {
 	TableText          string
 }
 
-// EvaluateDoneGate kiểm chứng chuỗi băm, toàn vẹn thư mục, độ phủ 100% R_i, chạy lại bộ test dự án và ghi báo cáo bàn giao.
+// EvaluateDoneGate giữ nguyên chữ ký tương thích ngược và ủy quyền cho EvaluateDoneGateWithOpts với cấu hình mặc định.
 func EvaluateDoneGate(
 	ctx context.Context,
 	st *storage.Store,
@@ -46,6 +55,19 @@ func EvaluateDoneGate(
 	allowedBins []string,
 	finalSuite []string,
 	timeout time.Duration,
+) (*DoneReport, error) {
+	return EvaluateDoneGateWithOpts(ctx, st, root, allowedBins, finalSuite, timeout, DoneOptions{})
+}
+
+// EvaluateDoneGateWithOpts kiểm chứng chuỗi băm, toàn vẹn thư mục, độ phủ 100% R_i (hỗ trợ đa chuyên ngành) và xuất báo cáo.
+func EvaluateDoneGateWithOpts(
+	ctx context.Context,
+	st *storage.Store,
+	root string,
+	allowedBins []string,
+	finalSuite []string,
+	timeout time.Duration,
+	opts DoneOptions,
 ) (*DoneReport, error) {
 	if err := verifyPreDoneState(st, root); err != nil {
 		return nil, err
@@ -63,12 +85,14 @@ func EvaluateDoneGate(
 		}
 	}
 
-	table := redact.ScrubText(formatCoverageTable(rows, finalEv))
+	opts = normalizeDoneOptions(root, opts)
+	table := redact.ScrubText(formatCoverageTable(rows, finalEv, opts))
 	mdPath := filepath.Join(root, ".sen", "delivery-report.md")
 	if err := os.MkdirAll(filepath.Dir(mdPath), 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(mdPath, []byte("# Sen MVP Delivery Report\n\n"+table), 0o644); err != nil {
+	header := fmt.Sprintf("# Sen-VN v%s Delivery Report\n\n", strings.TrimPrefix(opts.Version, "v"))
+	if err := os.WriteFile(mdPath, []byte(header+table), 0o644); err != nil {
 		return nil, err
 	}
 
@@ -78,6 +102,18 @@ func EvaluateDoneGate(
 		MarkdownPath:       mdPath,
 		TableText:          table,
 	}, nil
+}
+
+// normalizeDoneOptions điền giá trị mặc định cho phiên bản và chuyên ngành nếu người gọi không truyền tường minh.
+func normalizeDoneOptions(root string, opts DoneOptions) DoneOptions {
+	if strings.TrimSpace(opts.Version) == "" {
+		opts.Version = workspace.CurrentVersion
+	}
+	opts.DomainProfile = workspace.ResolveDomainProfile(root, opts.DomainProfile)
+	if strings.TrimSpace(opts.Companions) == "" {
+		opts.Companions = "none"
+	}
+	return opts
 }
 
 // verifyPreDoneState kiểm tra chuỗi băm bằng chứng từ GENESIS, không còn task OPEN và không có tệp trôi lệch khỏi __BASELINE__.
@@ -100,7 +136,7 @@ func verifyPreDoneState(st *storage.Store, root string) error {
 	return nil
 }
 
-// queryRequirementCoverage đối soát SQL (json_each) bắt buộc 100% yêu cầu R_i đều có task VERIFIED đạt exit_code = 0.
+// queryRequirementCoverage đối soát SQL (json_each) bắt buộc 100% yêu cầu R_i có task VERIFIED hợp lệ (TEST, MEDIA, BUILD, RUN).
 func queryRequirementCoverage(st *storage.Store) ([]DoneRow, error) {
 	reqs, err := st.ListRequirements()
 	if err != nil {
@@ -119,19 +155,19 @@ func queryRequirementCoverage(st *storage.Store) ([]DoneRow, error) {
 			mustTest = 1
 		}
 		err := st.DB().QueryRow(`
-			SELECT t.id, e.strength, e.tests_ran, e.command
+			SELECT t.id, t.risk_auto, e.strength, e.tests_ran, e.command
 			FROM tasks t
 			JOIN json_each(t.req_ids_json) j ON j.value = ?
 			JOIN evidence e ON e.task_id = t.id
 			WHERE t.status = 'VERIFIED'
 			  AND e.exit_code = 0
-			  AND (e.strength != 'TEST' OR e.tests_ran > 0)
+			  AND (e.strength NOT IN ('TEST', 'MEDIA') OR e.tests_ran > 0)
 			  AND (? = 0 OR (e.strength = 'TEST' AND e.tests_ran > 0))
 			ORDER BY
-			  CASE e.strength WHEN 'TEST' THEN 3 WHEN 'BUILD' THEN 2 ELSE 1 END DESC,
+			  CASE e.strength WHEN 'TEST' THEN 4 WHEN 'MEDIA' THEN 3 WHEN 'BUILD' THEN 2 ELSE 1 END DESC,
 			  e.seq DESC
 			LIMIT 1
-		`, r.ID, mustTest).Scan(&row.TaskID, &row.Strength, &row.TestsRan, &row.Command)
+		`, r.ID, mustTest).Scan(&row.TaskID, &row.RiskTier, &row.Strength, &row.TestsRan, &row.Command)
 
 		if errors.Is(err, sql.ErrNoRows) {
 			uncovered = append(uncovered, r.ID)
@@ -193,23 +229,36 @@ func sanitizeCell(s string, max int) string {
 	return s
 }
 
-// formatCoverageTable định dạng bảng đối chiếu R_i <-> Câu gốc người dùng <-> Lệnh kiểm chứng cho báo cáo nghiệm thu.
-func formatCoverageTable(rows []DoneRow, finalEv *storage.Evidence) string {
+// formatCoverageTable định dạng phần siêu dữ liệu v1.1.0 và bảng đối chiếu R_i <-> Risk Tier <-> Strength/Streams.
+func formatCoverageTable(rows []DoneRow, finalEv *storage.Evidence, opts DoneOptions) string {
 	var b strings.Builder
-	b.WriteString("| Req | User Quote | Task | Strength (TestsRan) | Command |\n")
-	b.WriteString("|---|---|---|---|---|\n")
+	expressLabel := "off"
+	if opts.ExpressMode {
+		expressLabel = "on"
+	}
+	b.WriteString(fmt.Sprintf("- **Sen-VN Version:** `v%s`\n", strings.TrimPrefix(opts.Version, "v")))
+	b.WriteString(fmt.Sprintf("- **Domain Profile:** `%s` | **Express Mode:** `%s`\n", opts.DomainProfile, expressLabel))
+	b.WriteString(fmt.Sprintf("- **Companions:** `%s`\n\n", opts.Companions))
+
+	b.WriteString("| Req | User Quote | Task | Risk Tier | Strength/Streams | Command |\n")
+	b.WriteString("|---|---|---|---|---|---|\n")
 	for _, r := range rows {
-		b.WriteString(fmt.Sprintf("| %s | %s | %s | %s (%d) | `%s` |\n",
+		tier := r.RiskTier
+		if strings.TrimSpace(tier) == "" {
+			tier = "SMALL"
+		}
+		b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s (%d) | `%s` |\n",
 			r.ReqID,
 			sanitizeCell(r.UserQuote, 48),
 			r.TaskID,
+			tier,
 			r.Strength,
 			r.TestsRan,
 			sanitizeCell(r.Command, 56),
 		))
 	}
 	if finalEv != nil {
-		b.WriteString(fmt.Sprintf("\n**Final Live Suite:** `%s` — `PASS` (`%s`, `%d` tests, hash `%s`)\n",
+		b.WriteString(fmt.Sprintf("\n**Final Live Suite:** `%s` — `PASS` (`%s`, `%d` tests/streams, hash `%s`)\n",
 			finalEv.Command, finalEv.Strength, finalEv.TestsRan, finalEv.EntryHash[:12]))
 	}
 	return b.String()

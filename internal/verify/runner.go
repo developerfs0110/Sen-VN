@@ -1,4 +1,4 @@
-// Tệp runner.go khởi chạy tiến trình con trực tiếp với môi trường đã lọc secret và ghi nhận bằng chứng cho từng task.
+// Tệp runner.go khởi chạy tiến trình con trực tiếp, khóa vòng lặp sửa lỗi <= 3 vòng (Quarantine) và ghi nhận bằng chứng.
 package verify
 
 import (
@@ -82,7 +82,7 @@ func executeFilteredSubprocess(ctx context.Context, root string, allowedBins []s
 	}, nil
 }
 
-// RunTaskVerification kiểm tra toàn vẹn trước & sau khi chạy lệnh, ép mức TEST cho BUGFIX, nâng __BASELINE__ và lưu evidence.
+// RunTaskVerification kiểm tra ngưỡng Quarantine <= 3 vòng, tính toàn vẹn trước & sau khi chạy lệnh và ghi chuỗi evidence.
 func RunTaskVerification(
 	ctx context.Context,
 	st *storage.Store,
@@ -98,6 +98,16 @@ func RunTaskVerification(
 	if err != nil {
 		return nil, err
 	}
+	failedBefore, err := workspace.ConsumeQuarantineResetForAttempt(st, root, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if failedBefore >= workspace.MaxRepairRounds {
+		return nil, fmt.Errorf(
+			"bounded repair loop exceeded (3/3 consecutive failed verify attempts on task %q); present objective dialectical root-cause to user (unlock via 'sen status --approve') or rollback via 'sen undo %s'",
+			taskID, taskID,
+		)
+	}
 	if err := workspace.CheckIntegrity(st, root, taskID, task.ScopeFiles); err != nil {
 		return nil, err
 	}
@@ -110,37 +120,56 @@ func RunTaskVerification(
 	if err := workspace.CheckIntegrity(st, root, taskID, task.ScopeFiles); err != nil {
 		return nil, err
 	}
+	return finalizeTaskVerification(st, root, task, failedBefore, res)
+}
 
+// finalizeTaskVerification áp dụng chính sách BUGFIX, gắn nhãn [QUARANTINE 3/3] ở lần lỗi thứ 3 hoặc nâng mốc __BASELINE__ khi đạt.
+func finalizeTaskVerification(
+	st *storage.Store,
+	root string,
+	task *storage.Task,
+	failedBefore int,
+	res *execResult,
+) (*storage.Evidence, error) {
 	policyErr := res.zeroTestErr
 	if policyErr == nil && taskRequiresTestStrength(st, task) && (res.strength != "TEST" || res.testsRan <= 0) {
 		policyErr = fmt.Errorf("BUGFIX task %q requires TEST verification strength with tests_ran > 0 (got %s, tests_ran=%d)",
-			taskID, res.strength, res.testsRan)
+			task.ID, res.strength, res.testsRan)
 	}
 
 	storedExit := res.rawExitCode
 	storedOut := res.redactedOutput
 	if storedExit == 0 && policyErr != nil {
 		storedExit = 1
-		storedOut = storedOut + "\n[SEN REJECTED] " + policyErr.Error()
+		tag := policyErr.Error()
+		if !strings.HasPrefix(tag, "[SEN REJECTED]") {
+			tag = "[SEN REJECTED] " + tag
+		}
+		storedOut = storedOut + "\n" + tag
 	}
 
-	ev, err := st.AppendEvidence(taskID, res.commandLine, res.strength, res.testsRan, storedExit, storedOut)
+	ev, err := st.AppendEvidence(task.ID, res.commandLine, res.strength, res.testsRan, storedExit, storedOut)
 	if err != nil {
 		return nil, err
 	}
-	if policyErr != nil {
-		return ev, policyErr
-	}
-	if res.rawExitCode != 0 || res.execErr != nil {
-		return ev, fmt.Errorf("verification failed (exit %d): %s", res.rawExitCode, res.commandLine)
+	if policyErr != nil || res.rawExitCode != 0 || res.execErr != nil {
+		retErr := policyErr
+		if retErr == nil {
+			retErr = fmt.Errorf("verification failed (exit %d): %s", res.rawExitCode, res.commandLine)
+		}
+		if failedBefore+1 >= workspace.MaxRepairRounds {
+			retErr = fmt.Errorf("[QUARANTINE 3/3] %w", retErr)
+		}
+		return ev, retErr
 	}
 
 	if err := workspace.AdvanceBaseline(st, root, task.ScopeFiles); err != nil {
 		return ev, fmt.Errorf("advance baseline: %w", err)
 	}
-	if err := st.UpdateTaskStatus(taskID, "VERIFIED"); err != nil {
+	if err := st.UpdateTaskStatus(task.ID, "VERIFIED"); err != nil {
 		return ev, err
 	}
+	workspace.ClearQuarantineReset(root, task.ID)
 	return ev, nil
 }
 

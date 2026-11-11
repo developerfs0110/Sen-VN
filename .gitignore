@@ -2,5 +2,6 @@
 /sen
 .sen/
 .cache/
+.agents/
 *.test
 *.out

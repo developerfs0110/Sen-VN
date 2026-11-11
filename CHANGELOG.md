@@ -1,6 +1,16 @@
 # Changelog
 
-All notable changes to **Sen MVP** are documented in this file.
+All notable changes to **Sen-VN** are documented in this file.
+
+## [1.1.0] - 2026-11-11
+
+### Added
+- **3-Tier Deterministic Task Sizing (`SMALL` / `MEDIUM` / `LARGE`):** Upgraded `ComputeRisk` / `ComputeRiskWithOpts` in `internal/workspace/risk.go` to classify tasks into `SMALL` (`<= 2` standard files), `MEDIUM` (`3–5` files), and `LARGE` (`> 5` files, `BUGFIX`, `--allow-delete`, or critical auth/payment/DB/CI paths) while keeping the frozen 5-table SQLite schema unchanged.
+- **Autonomous `--express` (*"Làm luôn đi"*) Mode with Tamper-Proof Config Guard:** Added `express_mode` to SHA-256-signed `.sen/config.json`, automatic intent detection (`"làm luôn đi"`, `"lam luon di"`, `"just do it"`, `"chạy thẳng"`) in `PreInvocation`, and safety gates in `PreToolUse` forcing human confirmation (`force_ask`) on destructive (`--allow-delete`), critical (`.env`, `auth/`, `payment/`, DB migration), or tampered-config edits.
+- **Bounded Repair Loop (`<= 3` Rounds / `[QUARANTINE 3/3]`) & Dialectical Audit (`sen-dialectical`):** Added consecutive failure counting on `evidence`, immediate quarantine blocking on the 4th attempt, `Stop` hook loop-prevention (`allow` when quarantined), human unlock via `sen status --approve`, and the progressive `sen-dialectical` skill (**Thesis -> Antithesis -> Synthesis** + **Resource Cost** table).
+- **Workflow Skill Capture (`sen-skill-capture`) & Multi-Domain Profiles (`--profile`):** Added `sen-skill-capture` skill and `DomainProfile` auto-detection (`code`, `web`, `video`, `media`, `docs`) so non-code workspaces (`docs`, `video`, `media`) verify and pass `sen done` cleanly without requiring dummy unit-test suites.
+- **Video Production Integrity (Immutable Raw Media Lock + `ffprobe` Referee):** Locked `raw/`, `master/`, `footage/`, and `originals/` media files (`>10MB` tracked via zero-copy `size + mtime_ns`), blocked destructive/in-place `ffmpeg` raw overwrites in `PreToolUse`, and added `internal/verify/ffprobe.go` (`MEDIA` strength) rejecting corrupt/0-stream outputs even when `ffprobe` exits `0`.
+- **Auto-Install Companion Bundle, Fork Fallback & Optional Packs (`packages.lock.json` + `--update`):** Added `sen init --install-companions`, `sen init --packs list|all|<csv>`, embedded offline skills (`archify`, `voicestudio`, `video-subtitles-effects`, `sen-dialectical`, `sen-skill-capture`), automatic `developerfs0110/...` Git fork fallback pinned by commit, skip-existing protection (`[exists]`), enhanced `.sen/delivery-report.md`, and atomic `.bak`-backed updates via `sen init --update` (`install-sen.ps1 -Update` / `install-sen.sh --update`).
 
 ## [1.0.0] - 2026-11-11
 

@@ -31,3 +31,4 @@ jobs:
 
       - name: Run unit & adversarial E2E suite
         run: go test -count=1 -v ./...
+

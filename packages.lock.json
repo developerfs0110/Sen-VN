@@ -1,0 +1,123 @@
+{
+  "version": "1.1.0",
+  "packages": [
+    {
+      "id": "superpowers",
+      "pack": "core",
+      "default": true,
+      "description": "Core software engineering workflows (systematic-debugging, TDD, brainstorming, writing-plans)",
+      "sourceType": "git",
+      "primaryUrl": "https://github.com/obra/superpowers.git",
+      "fallbackUrl": "https://github.com/developerfs0110/superpowers.git",
+      "pinnedCommit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+      "subPath": "",
+      "dest": ".agents/plugins/superpowers"
+    },
+    {
+      "id": "security-audit",
+      "pack": "core",
+      "default": true,
+      "description": "STRIDE, secret boundary, and vulnerability security review workflow",
+      "sourceType": "git",
+      "primaryUrl": "https://github.com/cloudflare/security-audit-skill.git",
+      "fallbackUrl": "https://github.com/developerfs0110/security-audit-skill.git",
+      "pinnedCommit": "c1c8a8c1471069fb0e188eeaff69b8e8db6564a8",
+      "subPath": "skills/security-audit",
+      "dest": ".agents/skills/security-audit"
+    },
+    {
+      "id": "vn-law-check",
+      "pack": "core",
+      "default": true,
+      "description": "Vietnam legal compliance (PDPL, Decree 356/2025, e-commerce, AI labeling)",
+      "sourceType": "git",
+      "primaryUrl": "https://github.com/mhfed/vn-law-check.git",
+      "fallbackUrl": "https://github.com/developerfs0110/vn-law-check.git",
+      "pinnedCommit": "c6391e04702a79c692592e1dbcfc720dfe3bb909",
+      "subPath": "plugins/vn-law-check/skills/vn-law-check",
+      "dest": ".agents/skills/vn-law-check"
+    },
+    {
+      "id": "sen-dialectical",
+      "pack": "core",
+      "default": true,
+      "description": "3-step Dialectical Audit (Thesis/Antithesis/Synthesis + Resource Cost) & <= 3 repair loop",
+      "sourceType": "embedded",
+      "embeddedDir": "sen-dialectical",
+      "dest": ".agents/skills/sen-dialectical"
+    },
+    {
+      "id": "sen-skill-capture",
+      "pack": "core",
+      "default": true,
+      "description": "Capture repeated workflows (2-3x) into reusable workspace .agents/skills/<kebab>/SKILL.md",
+      "sourceType": "embedded",
+      "embeddedDir": "sen-skill-capture",
+      "dest": ".agents/skills/sen-skill-capture"
+    },
+    {
+      "id": "archify",
+      "pack": "workflow-diagram",
+      "default": false,
+      "description": "Clean layered Mermaid Pro workflow/architecture diagrams and interactive HTML widgets",
+      "sourceType": "embedded",
+      "embeddedDir": "archify",
+      "dest": ".agents/skills/archify"
+    },
+    {
+      "id": "ffmpeg-skill",
+      "pack": "media-video",
+      "default": false,
+      "description": "FFmpeg video/audio processing pipelines and transcoding presets",
+      "sourceType": "git",
+      "primaryUrl": "https://github.com/huytran1120/vie-agentic-skills.git",
+      "fallbackUrl": "https://github.com/developerfs0110/vie-agentic-skills.git",
+      "pinnedCommit": "4b8e219c73f73a45da580eaa59e83268805730a2",
+      "subPath": "skills/ffmpeg-skill",
+      "dest": ".agents/skills/ffmpeg-skill"
+    },
+    {
+      "id": "video-subtitles-effects",
+      "pack": "media-video",
+      "default": false,
+      "description": "Video editing templates, transitions, Vietnamese UTF-8 ASS/SRT subtitles, -14 LUFS, and raw media lock",
+      "sourceType": "embedded",
+      "embeddedDir": "video-subtitles-effects",
+      "dest": ".agents/skills/video-subtitles-effects"
+    },
+    {
+      "id": "store-screenshots",
+      "pack": "media-image",
+      "default": false,
+      "description": "App Store / Google Play banner and screenshot composition templates",
+      "sourceType": "git",
+      "primaryUrl": "https://github.com/huytran1120/vie-agentic-skills.git",
+      "fallbackUrl": "https://github.com/developerfs0110/vie-agentic-skills.git",
+      "pinnedCommit": "4b8e219c73f73a45da580eaa59e83268805730a2",
+      "subPath": "skills/store-screenshots",
+      "dest": ".agents/skills/store-screenshots"
+    },
+    {
+      "id": "voicestudio",
+      "pack": "voice-tts",
+      "default": false,
+      "description": "Local AI voice synthesis, narration, audio transcription, and dubbing workflows",
+      "sourceType": "embedded",
+      "embeddedDir": "voicestudio",
+      "dest": ".agents/skills/voicestudio"
+    },
+    {
+      "id": "blender-director",
+      "pack": "media-3d",
+      "default": false,
+      "description": "3D scene staging, camera animation, lighting, and rendering in Blender",
+      "sourceType": "git",
+      "primaryUrl": "https://github.com/huytran1120/vie-agentic-skills.git",
+      "fallbackUrl": "https://github.com/developerfs0110/vie-agentic-skills.git",
+      "pinnedCommit": "4b8e219c73f73a45da580eaa59e83268805730a2",
+      "subPath": "skills/blender-skills/blender-director",
+      "dest": ".agents/skills/blender-director"
+    }
+  ]
+}
+

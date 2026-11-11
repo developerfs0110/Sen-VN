@@ -222,3 +222,97 @@ func TestSpoofedTempCmdBinaryAndBugfixBuildStrengthRejected(t *testing.T) {
 		t.Fatalf("expected BUGFIX task verified with `go build` (BUILD strength) to be rejected")
 	}
 }
+
+// TestFFprobeParserValidAndCorruptMedia kiểm chứng bộ đọc ffprobe JSON + key=value và từ chối video 0 stream / duration 0.
+func TestFFprobeParserValidAndCorruptMedia(t *testing.T) {
+	validJSON := `{
+		"streams": [
+			{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "r_frame_rate": "30/1"},
+			{"codec_type": "audio", "codec_name": "aac", "channels": 2, "sample_rate": "48000"}
+		],
+		"format": {"duration": "14.250000"}
+	}`
+	strength, streams, err := verify.ParseTestRun("ffprobe", []string{"-print_format", "json", "out.mp4"}, validJSON, 0)
+	if strength != "MEDIA" || streams != 2 || err != nil {
+		t.Fatalf("expected valid 2-stream MEDIA pass, got strength=%s streams=%d err=%v", strength, streams, err)
+	}
+
+	validKV := "[STREAM]\ncodec_type=video\ncodec_name=hevc\nwidth=1080\nheight=1920\nr_frame_rate=60/1\nduration=8.5\n[/STREAM]\n"
+	strength, streams, err = verify.ParseTestRun("ffprobe.exe", []string{"out.mp4"}, validKV, 0)
+	if strength != "MEDIA" || streams != 1 || err != nil {
+		t.Fatalf("expected valid key=value MEDIA pass, got strength=%s streams=%d err=%v", strength, streams, err)
+	}
+
+	corruptCases := []string{
+		`{"streams": [], "format": {"duration": "10.0"}}`,
+		`{"streams": [{"codec_type": "video", "codec_name": "h264", "width": 0, "height": 1080}], "format": {"duration": "10.0"}}`,
+		`{"streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "r_frame_rate": "0/0"}], "format": {"duration": "10.0"}}`,
+		`{"streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}], "format": {"duration": "0"}}`,
+		`{"streams": [{"codec_type": "audio", "codec_name": "aac", "channels": 0, "sample_rate": "48000"}], "format": {"duration": "5.0"}}`,
+	}
+	for i, bad := range corruptCases {
+		_, sCount, bErr := verify.ParseTestRun("ffprobe", []string{"-print_format", "json", "bad.mp4"}, bad, 0)
+		if bErr == nil || sCount != 0 || !strings.Contains(bErr.Error(), "invalid media output") {
+			t.Errorf("corrupt media case #%d expected rejection, got count=%d err=%v", i, sCount, bErr)
+		}
+	}
+}
+
+// TestBoundedRepairLoopQuarantineAndUnlock kiểm chứng khóa QUARANTINE sau 3 lần verify lỗi và mở khóa bằng WriteQuarantineReset.
+func TestBoundedRepairLoopQuarantineAndUnlock(t *testing.T) {
+	root := t.TempDir()
+	_ = os.WriteFile(filepath.Join(root, "go.mod"), []byte("module qmod\n\ngo 1.22\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "calc.go"), []byte("package qmod\n\nfunc Val() int { return 0 }\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "calc_test.go"), []byte("package qmod\n\nimport \"testing\"\nfunc TestVal(t *testing.T) { if Val() != 42 { t.Fatal(\"fail\") } }\n"), 0o644)
+
+	st, err := storage.Open(filepath.Join(root, ".sen", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	_, _ = st.AddRequirement("", "Make Val return 42", "Val=42", true)
+	_ = workspace.CaptureBaseline(st, root)
+	_ = st.CreateTask(storage.Task{
+		ID: "T-Q", ReqIDs: []string{"R1"}, Title: "q", Kind: "BUGFIX",
+		RiskAuto: "LARGE", ScopeFiles: []string{"calc.go"}, Status: "OPEN",
+	})
+	_ = workspace.BeginTaskSnapshot(st, root, "T-Q", []string{"calc.go"})
+
+	ctx := context.Background()
+	var thirdErr error
+	for round := 1; round <= 3; round++ {
+		_, thirdErr = verify.RunTaskVerification(ctx, st, root, "T-Q", []string{"go"}, []string{"go", "test", "-v", "./..."}, 30*time.Second)
+		if thirdErr == nil {
+			t.Fatalf("expected round %d to fail", round)
+		}
+	}
+	if !strings.Contains(thirdErr.Error(), "[QUARANTINE 3/3]") {
+		t.Fatalf("expected 3rd failure tagged with [QUARANTINE 3/3], got: %v", thirdErr)
+	}
+
+	// Lần thứ 4 bị chặn cứng không cho chạy tiến trình con khi chưa được --approve mở khóa!
+	_, fourthErr := verify.RunTaskVerification(ctx, st, root, "T-Q", []string{"go"}, []string{"go", "test", "-v", "./..."}, 30*time.Second)
+	if fourthErr == nil || !strings.Contains(fourthErr.Error(), "bounded repair loop exceeded") {
+		t.Fatalf("expected 4th blind attempt blocked by bounded repair loop, got: %v", fourthErr)
+	}
+
+	// Mở khóa qua WriteQuarantineReset (tương đương sen status --approve) rồi sửa đúng mã nguồn -> verify PASS!
+	if err := workspace.WriteQuarantineReset(st, root, "T-Q"); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(root, "calc.go"), []byte("package qmod\n\nfunc Val() int { return 42 }\n"), 0o644)
+	if _, err := verify.RunTaskVerification(ctx, st, root, "T-Q", []string{"go"}, []string{"go", "test", "-v", "./..."}, 30*time.Second); err != nil {
+		t.Fatalf("expected verify after quarantine unlock to PASS, got: %v", err)
+	}
+	rep, err := verify.EvaluateDoneGateWithOpts(ctx, st, root, []string{"go"}, nil, 30*time.Second, verify.DoneOptions{
+		Version: "1.1.0", DomainProfile: "code", ExpressMode: true, Companions: "superpowers=on",
+	})
+	if err != nil {
+		t.Fatalf("EvaluateDoneGateWithOpts failed: %v", err)
+	}
+	mdBytes, _ := os.ReadFile(rep.MarkdownPath)
+	if !strings.Contains(string(mdBytes), "v1.1.0") || !strings.Contains(string(mdBytes), "LARGE") {
+		t.Fatalf("expected enhanced delivery report metadata, got:\n%s", string(mdBytes))
+	}
+}
+

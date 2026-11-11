@@ -1,4 +1,4 @@
-// Tệp templates.go cung cấp mẫu quy tắc AGENTS.md (~31 dòng) và trình tạo cấu hình .agents/hooks.json cho Antigravity.
+// Tệp templates.go cung cấp mẫu quy tắc AGENTS.md (~38 dòng) cho Sen-VN v1.1.0 và cấu hình .agents/hooks.json cho Antigravity.
 package bridge
 
 import (
@@ -7,32 +7,33 @@ import (
 	"path/filepath"
 )
 
-// agentsMDTemplate định nghĩa quy trình Bookend 8 lệnh gọn nhẹ dùng chung cho mọi AI IDE.
-const agentsMDTemplate = `# Sen MVP — Deterministic Verification & Bookend Protocol
+// agentsMDTemplate định nghĩa quy trình Bookend 8 lệnh, phân cấp SMALL/MEDIUM/LARGE, --express và định tuyến Companion Skills.
+const agentsMDTemplate = `# Sen-VN v1.1.0 — Deterministic Verification & Bookend Protocol
 
-Always follow this 8-command workflow in this repository. Only ` + "`sen`" + ` creates verification evidence.
+Always follow this 8-command workflow (` + "`sen`" + ` on PATH or ` + "`./bin/sen`" + `). Only ` + "`sen`" + ` creates verification evidence.
 
 ## 1. Bookend Workflow (Exact 8 Commands)
-1. **Orient:** Run ` + "`sen brief`" + ` at session start (if an ` + "`OPEN`" + ` task is interrupted, run ` + "`sen undo`" + ` or finish verifying it).
-2. **Intake:** Before planning/coding, record verbatim user intent:
-   ` + "`sen intake --quote \"<exact user request>\" --req \"<requirement summary>\" [--bugfix] [--security] [--vn-law]`" + `
-   Record persistent user constraints (` + "`<= 20`" + ` max) via ` + "`sen intake --rule \"<rule>\" [--glob \"*\"] [--replace <id>] [--delete <id>]`" + `.
-3. **Begin:** Declare requirement links and exact file scope before editing:
-   ` + "`sen begin <task_id> --reqs R1,R2 --files path/a.go,path/a_test.go [--kind feature|bugfix|ui]`" + `
-4. **Verify / Undo:** Verify using real direct test/build binaries (never ` + "`sh -c`" + ` or ` + "`cmd /C`" + `):
-   ` + "`sen verify <task_id> -- <bin> [args...]`" + ` (or rollback cleanly via ` + "`sen undo [task_id]`" + `).
-5. **Status & Done:** Inspect via ` + "`sen status [--approve]`" + `. Never claim work is finished until ` + "`sen done`" + ` exits ` + "`0`" + `.
+1. **Orient:** Run ` + "`sen brief`" + ` at session start (if an ` + "`OPEN`" + ` task is interrupted or in ` + "`QUARANTINE`" + `, report or run ` + "`sen undo`" + `).
+2. **Intake:** Record verbatim user intent before planning/editing (add ` + "`--express`" + ` if user says *"làm luôn đi"* / *"just do it"*):
+   ` + "`sen intake --quote \"<exact user request>\" --req \"<summary>\" [--bugfix] [--security] [--vn-law] [--express]`" + `
+   Manage persistent project rules (` + "`<= 20`" + ` max) via ` + "`sen intake --rule \"<rule>\" [--glob \"*\"] [--replace <id>] [--delete <id>]`" + `.
+3. **Begin:** Declare requirement links and exact file scope (` + "`SMALL`" + ` / ` + "`MEDIUM`" + ` / ` + "`LARGE`" + ` auto-sized):
+   ` + "`sen begin <task_id> --reqs R1,R2 --files path/a.go,path/a_test.go [--kind feature|bugfix|ui] [--allow-delete] [--express]`" + `
+4. **Verify / Undo:** Verify via direct binaries (` + "`go`" + `, ` + "`pytest`" + `, ` + "`vitest`" + `, ` + "`ffprobe`" + ` — never ` + "`sh -c`" + ` or ` + "`cmd /C`" + `, ` + "`<= 3`" + ` repair rounds):
+   ` + "`sen verify <task_id> -- <bin> [args...]`" + ` (or rollback byte-for-byte via ` + "`sen undo [task_id]`" + `).
+5. **Status & Done:** Inspect/approve via ` + "`sen status [--approve]`" + `. Never claim completion until ` + "`sen done`" + ` exits ` + "`0`" + `.
 
 ## 2. Non-Negotiable Guardrails
-- Never edit ` + "`.sen/`" + ` or pre-existing locked test files; put brand-new TDD test files in ` + "`--files`" + `.
-- Out-of-scope file edits, zero-test runs (` + "`[no test files]`" + `, ` + "`0 passed`" + `), and uncovered ` + "`R_i`" + ` fail ` + "`sen verify`" + ` / ` + "`sen done`" + `.
+- Never edit ` + "`.sen/`" + `, pre-existing locked tests, or immutable raw media (` + "`raw/`" + `, ` + "`master/`" + `, ` + "`footage/`" + `, ` + "`originals/`" + `).
+- Out-of-scope edits, empty test/media runs (` + "`0 passed`" + `, ` + "`0 streams`" + `), and ` + "`> 3`" + ` blind retries (` + "`[QUARANTINE 3/3]`" + `) are blocked.
 
 ## 3. Progressive Companion Skill Routing (0 Idle Tokens)
-Check ` + "`sen brief`" + ` for installed Companion Skills in ` + "`.agents/`" + ` (degrade gracefully if absent):
-- **Bugfix (` + "`--bugfix`" + ` / ` + "`kind=bugfix`" + `):** Activate ` + "`systematic-debugging`" + ` (` + "`superpowers`" + `) to isolate root cause before editing.
-- **Complex / High Risk (` + "`risk=HIGH`" + ` or ` + "`>= 3`" + ` reqs):** Activate ` + "`brainstorming`" + ` + ` + "`writing-plans`" + ` (` + "`superpowers`" + `) before ` + "`sen begin`" + `.
-- **Security Surface (auth, API, DB, secrets, crypto):** Activate ` + "`security-audit`" + ` and anchor ` + "`sen intake --security`" + ` (` + "`R_sec`" + `).
-- **Vietnam Compliance (personal data, consent, e-commerce, AI output, release):** Activate ` + "`vn-law-check`" + ` and anchor ` + "`sen intake --vn-law`" + ` (` + "`R_law`" + `).
+Check ` + "`sen brief`" + ` for installed skills in ` + "`.agents/`" + ` (install via ` + "`sen init --install-companions [--packs list]`" + `):
+- **Dialectical Proof (` + "`MEDIUM`" + ` / ` + "`LARGE`" + `):** Activate ` + "`sen-dialectical`" + ` (Thesis -> Antithesis -> Synthesis + **Resource Cost** table).
+- **Bugfix (` + "`--bugfix`" + ` / ` + "`kind=bugfix`" + `):** Activate ` + "`systematic-debugging`" + ` (` + "`superpowers`" + `) before editing.
+- **Large Architecture (` + "`risk=LARGE`" + ` or ` + "`>= 3`" + ` reqs):** Activate ` + "`brainstorming`" + ` + ` + "`writing-plans`" + ` (` + "`superpowers`" + `) before ` + "`sen begin`" + `.
+- **Security & VN Law:** Activate ` + "`security-audit`" + ` (` + "`--security`" + ` -> ` + "`R_sec`" + `) and ` + "`vn-law-check`" + ` (` + "`--vn-law`" + ` -> ` + "`R_law`" + `) when applicable.
+- **Repeated Workflows (2–3x):** Offer ` + "`sen-skill-capture`" + ` to package reusable skills under ` + "`.agents/skills/<kebab-name>/SKILL.md`" + `.
 `
 
 // RenderAgentsMD trả về nội dung chuẩn của tệp AGENTS.md khi khởi tạo dự án.

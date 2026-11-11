@@ -1,46 +1,48 @@
-# Sen MVP v1.0 (Tiếng Việt)
+# Sen-VN v1.1.0 (Tiếng Việt)
 
-**Sổ cái xác định & Trọng tài kiểm chứng cho AI Coding (`sen`)** — không cần API key trả phí, không CGO, không bắt buộc Docker, đóng gói sẵn dạng **Plugin Antigravity & Kho GitHub Zero-Build** (sinh viên không cần cài Go vẫn chạy ngay).
+**Sổ cái xác định & Trọng tài kiểm chứng đa chuyên ngành cho AI (`sen`)** — không cần API key trả phí, không CGO, không bắt buộc Docker, đóng gói sẵn dạng **Plugin Antigravity & Kho GitHub Zero-Build** (sinh viên không cần cài Go vẫn chạy ngay).
 
 ---
 
-## Vì sao cần Sen MVP?
+## Điểm mới nổi bật trong Sen-VN v1.1.0 (Giữ nguyên bất biến 8 lệnh CLI & 5 bảng SQLite)
 
-Các AI Agent khi lập trình thường gặp lỗi "ảo giác hoàn thành": chạy `go test` trên thư mục rỗng (`[no test files]`), tự ý sửa yếu file unit test cũ để ép pass, sửa lén file ngoài phạm vi, bỏ sót yêu cầu khi prompt dài, hoặc làm lộ `API_KEY` trong log.
-
-**Sen MVP** đóng vai trò trọng tài độc lập tại máy cục bộ dựa trên SQLite WAL gồm đúng 5 bảng (`.sen/state.db`):
-1. **Hậu kiểm phổ quát (Mọi IDE) + Tiền kiểm tự động (Antigravity):** Hoạt động trên mọi IDE qua file `AGENTS.md` gọn ~31 dòng, và tự động nâng cấp lên chặn trước thao tác thông qua `hooks.json` (`SessionStart`, `PreInvocation`, `PreToolUse`, `Stop`) trên Antigravity.
-2. **Chỉ `sen` mới tạo được bằng chứng (`evidence`):** Agent không có bất kỳ cờ CLI hay đường tắt nào để tự đánh dấu `"PASS"`. `sen verify` và `sen done` gọi trực tiếp binary (`exec.CommandContext`, tuyệt đối không qua `sh -c` hay `cmd /C`), lọc biến môi trường nhạy cảm, từ chối bộ test rỗng (`0` test), che token rò rỉ (`[REDACTED]`) và nối chuỗi băm SHA-256 chống sửa trộm.
-3. **Khung xương cứng + Kỹ năng đồng hành linh hoạt (`0` Token nhàn rỗi):** Tự động phát hiện các gói kỹ năng trong `.agents/` (`superpowers`, `security-audit`, `vn-law-check`), neo yêu cầu `R_sec` / `R_law` vào SQLite khi kích hoạt và tự thích ứng mượt mà khi máy chưa cài.
+1. **Định cỡ rủi ro 3 tầng (`SMALL` / `MEDIUM` / `LARGE`) & Chế độ tự hành `--express` (*"Làm luôn đi"*):**
+   - Tự động phân tầng: `SMALL` (`<=2` file), `MEDIUM` (`3-5` file), `LARGE` (`>5` file, `bugfix`, hạ tầng trọng yếu hoặc `--allow-delete`).
+   - Khi người dùng nói *"làm luôn đi"* / *"chạy thẳng"* / *"just do it"* (hoặc bật `--express`), Sen tự động cho phép chạy thẳng các tác vụ không phá hủy nhưng **vẫn bắt buộc hỏi xác nhận (`force_ask`)** nếu có xóa file (`--allow-delete`) hoặc chạm tới `.env`, `auth/`, `payment/`, DB migration. Tệp `.sen/config.json` được ký `.sen/config.sha256` chống Agent tự ý bật lén.
+2. **Chốt chặn vòng lặp sửa lỗi `<= 3` vòng (`[QUARANTINE 3/3]`) & Thẩm định biện chứng (`sen-dialectical`):**
+   - Khóa cứng lần `sen verify` thứ 4 khi thất bại 3 vòng liên tiếp, cho phép `Stop` hook thoát an toàn (không bị lặp vô hạn) để báo cáo nguyên nhân gốc rễ khách quan kèm cột **Tài nguyên tiêu tốn** trước khi người dùng mở khóa bằng `sen status --approve` hoặc hoàn tác `sen undo`.
+3. **Đa chuyên ngành (`--profile auto|code|web|video|media|docs`) & Bảo vệ Video Production (`ffprobe` + Khóa Raw Media):**
+   - Tự động nhận diện dự án lập trình, Web/UI, dựng phim (`video`), đồ họa/âm thanh (`media`) và tài liệu (`docs` — không ép chạy `go test`/`npm test` giả tạo).
+   - Khóa bất biến toàn bộ thư mục `raw/`, `master/`, `footage/`, `originals/` (theo dõi `size + mtime_ns` cho file `>10MB` không tốn ổ cứng sao chép), chặn lệnh `ffmpeg` ghi đè file gốc ở `PreToolUse`, và tích hợp bộ phân tích `ffprobe` kiểm tra số luồng video/audio, codec, độ phân giải, thời lượng (`strength=MEDIA`).
+4. **Cài đặt tự động gói kỹ năng mặc định + Fork dự phòng `developerfs0110` + Menu Gói mở rộng (`--packs`) + Cập nhật an toàn (`--update`):**
+   - `sen init --install-companions`: tự cài `superpowers`, `security-audit`, `vn-law-check`, `sen-dialectical`, `sen-skill-capture` (nếu có sẵn sẽ báo `[exists]` và bỏ qua; nếu link gốc lỗi tự động chuyển sang fork `https://github.com/developerfs0110/...` đúng mã commit cố định).
+   - `sen init --packs list` / `sen init --packs workflow-diagram,media-video,media-image,voice-tts,media-3d`: cài thêm gói kỹ năng theo nhu cầu (`archify`, `ffmpeg-skill`, `video-subtitles-effects`, `store-screenshots`, `voicestudio`, `blender-director`).
+   - `sen init --update`: kiểm tra phiên bản mới trên GitHub Releases và nâng cấp nguyên tử các gói trong `.agents/sen.lock.json` kèm sao lưu/rollback `.bak`.
 
 ---
 
 ## Cài đặt Zero-Build 1 Lệnh (Không cần cài Go!)
 
 ### Cách 1 — Cài làm Plugin Antigravity (Zero-Build)
-Clone trực tiếp vào thư mục `.agents/plugins/` của workspace:
 ```bash
 git clone https://github.com/developerfs0110/Sen-VN.git .agents/plugins/sen-vn
 ```
-Antigravity tự nhận diện `plugin.json`, `hooks.json`, `rules/AGENTS.md` và `skills/sen-setup/SKILL.md`. Lần chạy đầu tiên, wrapper `./bin/sen` (`bin/sen.cmd` trên Windows, `bin/sen` trên macOS/Linux) tự tải bản thực thi từ GitHub Releases, kiểm chứng mã băm `SHA-256` từ `checksums.txt` (hoặc tự `go build` một lần nếu đang offline và máy có sẵn Go), lưu vào `$PLUGIN_DATA/bin` rồi chạy tức thì `<2ms` cho mọi lần gọi tiếp theo.
+Antigravity tự nhận diện `plugin.json` (`v1.1.0`), `hooks.json`, `rules/AGENTS.md` và bộ kỹ năng `sen-setup`, `sen-dialectical`, `sen-skill-capture`.
 
-### Cách 2 — Cài CLI vào `PATH` của User (Cho sinh viên trên Windows / macOS / Linux)
+### Cách 2 — Cài CLI vào `PATH` kèm Bộ Kỹ Năng Đồng Hành (Windows / macOS / Linux)
 **Windows PowerShell (Không cần quyền Admin / SmartScreen-safe):**
 ```powershell
 irm https://raw.githubusercontent.com/developerfs0110/Sen-VN/main/scripts/install-sen.ps1 | iex
+# Khởi tạo dự án kèm gói mặc định + gói mở rộng hoặc cập nhật an toàn:
+powershell -ExecutionPolicy Bypass -File .\scripts\install-sen.ps1 -Workspace . -Packs media-video,workflow-diagram
+powershell -ExecutionPolicy Bypass -File .\scripts\install-sen.ps1 -Workspace . -Update
 ```
-*(Hoặc từ thư mục đã clone: `powershell -ExecutionPolicy Bypass -File .\scripts\install-sen.ps1`)* — Tự tải `checksums.txt` + `sen-windows-amd64.exe` qua HTTPS, đối chiếu `SHA-256`, chạy `Unblock-File` và thêm `%LOCALAPPDATA%\Programs\sen\bin` vào `PATH` của User.
 
 **macOS / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/developerfs0110/Sen-VN/main/scripts/install-sen.sh | sh
-```
-
-### Cách 3 — Biên dịch từ mã nguồn (Dành cho Go Developer, Go 1.26+)
-```bash
-go install github.com/developerfs0110/Sen-VN/cmd/sen@latest
-# hoặc tại thư mục gốc dự án:
-go build -o sen.exe ./cmd/sen
+./scripts/install-sen.sh --workspace . --packs media-video,workflow-diagram
+./scripts/install-sen.sh --workspace . --update
 ```
 
 ---
@@ -49,18 +51,11 @@ go build -o sen.exe ./cmd/sen
 
 | # | Lệnh | Vai trò |
 |---|---|---|
-| 1 | `sen init [--with-companions] [--agy-hooks]` | Khởi tạo `.sen/state.db` (5 bảng WAL), `.sen/config.json` (+ `.sen/config.sha256`), `AGENTS.md` (~31 dòng), `.agents/hooks.json` và chụp mốc nền `__BASELINE__`. |
-| 2 | `sen brief [--path <file>] [--hook [event]]` | In tóm tắt ngữ cảnh `<250 token` (luật dự án, `R_i` còn thiếu, kỹ năng đồng hành, cảnh báo task `OPEN` bị gián đoạn) hoặc xử lý JSON hook của Antigravity. |
-| 3 | `sen intake` | Ghi nhận nguyên văn yêu cầu (`--quote "<raw>" --req "<summary>" [--bugfix] [--security] [--vn-law]`) hoặc quản lý luật dự án (`--rule "<text>" [--glob "*"] [--replace <id>] [--delete <id>]`, tối đa `<= 20` luật). |
-| 4 | `sen begin <task_id>` | Mở task bất biến (`--reqs R1,R2 --files f1,f2 [--kind feature\|bugfix\|ui] [--allow-delete]`), tính `risk_auto` xác định, khóa SHA-256 toàn bộ file test có sẵn (`is_locked_test = 1`) và sao lưu file `<= 10MB`. |
-| 5 | `sen verify <task_id> -- <bin> [args...]` | Kiểm tra sửa lén ngoài phạm vi so với `__BASELINE__` & file test bị khóa, chạy trực tiếp `<bin>` với môi trường sạch, chặn chạy 0 test, nâng mốc `__BASELINE__` khi pass, ẩn secret và ghi chuỗi băm `evidence`. |
-| 6 | `sen undo [task_id]` | Khôi phục chính xác từng byte cho task đang `OPEN` từ `.sen/snapshots/<task_id>/`, dọn file mới tạo và đánh dấu `UNDONE`. |
-| 7 | `sen done [-- <suite_bin> <args...>]` | Cổng nghiệm thu cuối: kiểm chứng chuỗi băm SHA-256 từ `GENESIS`, kiểm tra toàn vẹn workspace, chạy lại bộ test dự án và đối soát SQL đảm bảo **100% `R_i` đều có task `VERIFIED` đạt `exit_code = 0`**. Xuất `.sen/delivery-report.md`. |
-| 8 | `sen status [--approve]` | Hiển thị bảng tiến độ ASCII (`Rules N/20`, `Companions`, `Requirements`, `Tasks`, `Evidence`) và duyệt nhanh yêu cầu với `--approve`. |
-
----
-
-## Ranh giới vận hành trung thực
-
-- **Giới hạn tiến trình so với Container:** Danh sách trắng binary + kiểm tra đường dẫn `PATH` an toàn + `exec.CommandContext` trực tiếp + lọc biến môi trường giúp chặn chèn lệnh shell, giả mạo shim trong `%TEMP%` và lộ khóa API của máy mẹ mà không ép sinh viên phải cài Docker. Để cô lập mã độc hoàn toàn ở mức hệ điều hành vẫn cần VM/Container.
-- **Truy vết xác định & Đối chiếu ngữ nghĩa:** SQL đảm bảo 100% `R_i` gắn với lệnh kiểm thử thực thi thành công; bảng nghiệm thu của `sen done` đặt `R_i <-> Câu gốc của người dùng <-> Lệnh kiểm chứng` cạnh nhau để con người rà soát trong vài giây.
+| 1 | `sen init [--install-companions] [--packs <list\|all\|csv>] [--profile <...>] [--express] [--update]` | Khởi tạo `.sen/state.db` (5 bảng WAL), `.sen/config.json` (+ `.sen/config.sha256`), `AGENTS.md`, `.agents/hooks.json`, tự cài gói kỹ năng đồng hành / gói mở rộng hoặc chạy cập nhật an toàn (`--update`). |
+| 2 | `sen brief [--path <file>] [--hook [event]]` | In tóm tắt `<250 token` (`profile`, `express`, kỹ năng đồng hành, cảnh báo `QUARANTINE` / task `OPEN` dở dang, `R_i` chưa đạt) hoặc xử lý JSON hook Antigravity. |
+| 3 | `sen intake` | Ghi nhận nguyên văn yêu cầu (`--quote "<raw>" --req "<summary>" [--bugfix] [--security] [--vn-law] [--express]`) hoặc quản lý luật dự án (`<= 20` luật). |
+| 4 | `sen begin <task_id>` | Mở task bất biến (`--reqs R1,R2 --files f1,f2 [--kind feature\|bugfix\|ui] [--allow-delete] [--express]`), tự động định cỡ `SMALL`/`MEDIUM`/`LARGE`, khóa SHA-256 file test và khóa bất biến file raw media. |
+| 5 | `sen verify <task_id> -- <bin> [args...]` | Giới hạn `<= 3` lần lỗi liên tiếp (`[QUARANTINE 3/3]`), kiểm tra toàn vẹn phạm vi & tài nguyên khóa, chạy trực tiếp `<bin>` (`go`, `pytest`, `vitest`, `ffprobe`...), chặn 0 test / media hỏng 0 stream, nâng mốc `__BASELINE__` và nối chuỗi băm `evidence`. |
+| 6 | `sen undo [task_id]` | Khôi phục chính xác từng byte cho task `OPEN`, dọn file mới tạo, xóa cờ cách ly và đánh dấu `UNDONE`. |
+| 7 | `sen done [-- <suite_bin> <args...>]` | Kiểm chứng chuỗi băm từ `GENESIS`, toàn vẹn workspace/raw-media, bộ kiểm thử theo chuyên ngành và đối soát SQL đảm bảo **100% `R_i` đã `VERIFIED`**. Xuất `.sen/delivery-report.md` nâng cao. |
+| 8 | `sen status [--approve] [--express]` | Hiển thị chuyên ngành, chế độ tự hành, luật, yêu cầu, task (`[QUARANTINE 3/3]`) và chuỗi bằng chứng; `--approve` phê duyệt yêu cầu đồng thời mở khóa vòng lặp sửa lỗi cho task đang kẹt. |

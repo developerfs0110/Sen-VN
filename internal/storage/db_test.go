@@ -212,3 +212,29 @@ func TestImmutableCreateTaskAndPreserveApprovalOnReIntake(t *testing.T) {
 		t.Fatalf("expected Approved=true and original quote preserved, got %+v", reqs[0])
 	}
 }
+
+// TestCountConsecutiveFailedEvidence kiểm chứng đếm số lần verify lỗi liên tiếp từ lần pass gần nhất mà không tạo bảng mới.
+func TestCountConsecutiveFailedEvidence(t *testing.T) {
+	st, err := storage.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	_, _ = st.AppendEvidence("T1", "go test", "TEST", 0, 1, "fail 1")
+	_, _ = st.AppendEvidence("T1", "go test", "TEST", 2, 0, "pass resets streak")
+	ev3, _ := st.AppendEvidence("T1", "go test", "TEST", 0, 1, "fail A")
+	_, _ = st.AppendEvidence("T-OTHER", "go test", "TEST", 0, 1, "other task fail")
+	_, _ = st.AppendEvidence("T1", "go test", "TEST", 0, 2, "fail B")
+
+	got, err := st.CountConsecutiveFailedEvidence("T1")
+	if err != nil || got != 2 {
+		t.Fatalf("expected 2 consecutive failed evidence rows for T1, got %d (err=%v)", got, err)
+	}
+
+	gotAfter, err := st.CountConsecutiveFailedEvidenceSince("T1", ev3.Seq)
+	if err != nil || gotAfter != 1 {
+		t.Fatalf("expected 1 failed evidence row after seq %d, got %d (err=%v)", ev3.Seq, gotAfter, err)
+	}
+}
+

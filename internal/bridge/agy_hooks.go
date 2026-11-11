@@ -1,4 +1,4 @@
-// Tệp agy_hooks.go thực thi giao thức JSON stdin/stdout cho 4 sự kiện tiền kiểm và hậu kiểm của Antigravity.
+// Tệp agy_hooks.go thực thi giao thức JSON stdin/stdout cho 4 sự kiện vòng đời của Antigravity (hỗ trợ --express & QUARANTINE).
 package bridge
 
 import (
@@ -16,16 +16,18 @@ import (
 	"github.com/developerfs0110/Sen-VN/internal/workspace"
 )
 
-// hookPayload ánh xạ cấu trúc JSON camelCase mà Antigravity truyền qua luồng stdin cho mỗi sự kiện hook.
+// hookPayload ánh xạ cấu trúc JSON camelCase mà Antigravity (toolCall) hoặc Claude (toolName/toolInput) truyền qua stdin.
 type hookPayload struct {
-	HookEventName     string        `json:"hookEventName"`
-	InvocationNum     int           `json:"invocationNum"`
-	LastUserInput     string        `json:"lastUserInput"`
-	Cwd               string        `json:"cwd"`
-	WorkspacePaths    []string      `json:"workspacePaths"`
-	TerminationReason string        `json:"terminationReason"`
-	FullyIdle         *bool         `json:"fullyIdle"`
-	ToolCall          *hookToolCall `json:"toolCall"`
+	HookEventName     string         `json:"hookEventName"`
+	InvocationNum     int            `json:"invocationNum"`
+	LastUserInput     string         `json:"lastUserInput"`
+	Cwd               string         `json:"cwd"`
+	WorkspacePaths    []string       `json:"workspacePaths"`
+	TerminationReason string         `json:"terminationReason"`
+	FullyIdle         *bool          `json:"fullyIdle"`
+	ToolCall          *hookToolCall  `json:"toolCall"`
+	ToolName          string         `json:"toolName"`
+	ToolInput         map[string]any `json:"toolInput"`
 }
 
 // hookToolCall mô tả tên công cụ và tập tham số sắp được Agent gọi trong sự kiện PreToolUse.
@@ -97,7 +99,7 @@ func HandleAntigravityHookWithEvent(st *storage.Store, root, fallbackEvent strin
 	case "PreToolUse":
 		return handlePreToolUse(effStore, effRoot, p, stdout)
 	case "Stop":
-		return handleStopHook(effStore, p, stdout)
+		return handleStopHook(effStore, effRoot, p, stdout)
 	default:
 		return writeJSON(stdout, map[string]any{})
 	}
@@ -154,7 +156,7 @@ func handleSessionStart(st *storage.Store, root string, stdout io.Writer) error 
 	})
 }
 
-// handlePreInvocation lưu câu nhắc nguyên văn (đã lọc secret) vào .sen/last_prompt.txt và tránh bơm trùng ở các bước sau.
+// handlePreInvocation lưu câu nhắc nguyên văn, nhận diện cụm từ ủy quyền tự hành ("làm luôn đi") và tránh bơm trùng.
 func handlePreInvocation(st *storage.Store, root string, p hookPayload, stdout io.Writer) error {
 	if st == nil {
 		return writeJSON(stdout, map[string]any{})
@@ -173,6 +175,11 @@ func handlePreInvocation(st *storage.Store, root string, p hookPayload, stdout i
 		}
 	}
 
+	expressAuthorized := prompt != "" && ContainsExpressPhrase(prompt)
+	if expressAuthorized && root != "" {
+		_ = WriteSignedRuntimeConfig(root, true, "")
+	}
+
 	if p.InvocationNum > 1 && (prompt == "" || prompt == prevPrompt) {
 		return writeJSON(stdout, map[string]any{})
 	}
@@ -180,6 +187,9 @@ func handlePreInvocation(st *storage.Store, root string, p hookPayload, stdout i
 	msg := FormatBrief(st, root, "")
 	if prompt != "" {
 		msg += "Note: Verbatim prompt saved to .sen/last_prompt.txt (`sen intake --req \"...\"` auto-loads quote if --quote is omitted)."
+		if expressAuthorized {
+			msg += "\nExpress Authorization Detected: User delegated autonomous execution — pass `--express` on `sen intake` and `sen begin` (still brakes on file deletions or critical .env/auth/payment/schema paths)."
+		}
 	}
 	return writeJSON(stdout, map[string]any{
 		"injectSteps": []map[string]any{
@@ -188,8 +198,8 @@ func handlePreInvocation(st *storage.Store, root string, p hookPayload, stdout i
 	})
 }
 
-// handleStopHook yêu cầu Agent tiếp tục hoàn tất verify hoặc undo nếu vẫn còn task đang treo ở trạng thái OPEN.
-func handleStopHook(st *storage.Store, p hookPayload, stdout io.Writer) error {
+// handleStopHook yêu cầu hoàn tất task OPEN nhưng tự động cho phép dừng ("allow") nếu task đã chạm ngưỡng QUARANTINE 3/3.
+func handleStopHook(st *storage.Store, root string, p hookPayload, stdout io.Writer) error {
 	if st == nil {
 		return writeJSON(stdout, map[string]any{"decision": "allow"})
 	}
@@ -200,6 +210,9 @@ func handleStopHook(st *storage.Store, p hookPayload, stdout io.Writer) error {
 		return writeJSON(stdout, map[string]any{"decision": "allow"})
 	}
 	if open := findOpenTask(st); open != nil {
+		if failed, _ := workspace.ActiveFailedVerifyCount(st, root, open.ID); failed >= workspace.MaxRepairRounds {
+			return writeJSON(stdout, map[string]any{"decision": "allow"})
+		}
 		return writeJSON(stdout, map[string]any{
 			"decision": "continue",
 			"reason":   fmt.Sprintf("Sen task %q is still OPEN. Run `sen verify %s -- <cmd>` or `sen undo %s` before ending turn.", open.ID, open.ID, open.ID),
@@ -208,19 +221,29 @@ func handleStopHook(st *storage.Store, p hookPayload, stdout io.Writer) error {
 	return writeJSON(stdout, map[string]any{"decision": "allow"})
 }
 
-// handlePreToolUse chặn lệnh shell can thiệp trực tiếp vào .sen/ và kiểm tra quyền ghi tệp của Agent.
+// handlePreToolUse chặn lệnh shell can thiệp vào .sen/, chặn ffmpeg/magick ghi đè raw media và kiểm soát công cụ ghi tệp.
 func handlePreToolUse(st *storage.Store, root string, p hookPayload, stdout io.Writer) error {
-	if p.ToolCall == nil {
+	tc := p.ToolCall
+	if tc == nil && strings.TrimSpace(p.ToolName) != "" {
+		tc = &hookToolCall{Name: p.ToolName, Args: p.ToolInput}
+	}
+	if tc == nil {
 		return writeJSON(stdout, map[string]any{"decision": "allow"})
 	}
-	toolName := strings.ToLower(strings.TrimSpace(p.ToolCall.Name))
+	toolName := strings.ToLower(strings.TrimSpace(tc.Name))
 
 	if toolName == "run_command" {
-		cmdLine := extractStringArg(p.ToolCall.Args, "CommandLine", "command", "cmd")
+		cmdLine := extractStringArg(tc.Args, "CommandLine", "command", "cmd")
 		if commandTouchesDotSen(cmdLine) {
 			return writeJSON(stdout, map[string]any{
 				"decision": "deny",
 				"reason":   "Direct shell access to .sen/ is blocked by Sen; use `sen` CLI subcommands.",
+			})
+		}
+		if rawReason := commandMutatesRawMedia(cmdLine); rawReason != "" {
+			return writeJSON(stdout, map[string]any{
+				"decision": "deny",
+				"reason":   rawReason,
 			})
 		}
 		return writeJSON(stdout, map[string]any{"decision": "allow"})
@@ -229,71 +252,7 @@ func handlePreToolUse(st *storage.Store, root string, p hookPayload, stdout io.W
 	if !writeToolNames[toolName] {
 		return writeJSON(stdout, map[string]any{"decision": "allow"})
 	}
-	return evaluateWriteToolDecision(st, root, p.ToolCall.Args, stdout)
-}
-
-// evaluateWriteToolDecision từ chối sửa .sen/, tệp test bị khóa, tệp ngoài scope_files và buộc hỏi xác nhận khi rủi ro HIGH.
-func evaluateWriteToolDecision(st *storage.Store, root string, args map[string]any, stdout io.Writer) error {
-	rawPath := extractStringArg(args, "Path", "TargetFile", "file_path", "path")
-	if rawPath == "" {
-		return writeJSON(stdout, map[string]any{"decision": "allow"})
-	}
-	rel, err := workspace.NormalizeRelPath(root, rawPath)
-	if err != nil {
-		return writeJSON(stdout, map[string]any{"decision": "allow"})
-	}
-	lowerRel := strings.ToLower(rel)
-	if lowerRel == ".sen" || strings.HasPrefix(lowerRel, ".sen/") {
-		return writeJSON(stdout, map[string]any{
-			"decision": "deny",
-			"reason":   "Protected .sen/ ledger cannot be edited by agent tools.",
-		})
-	}
-	if st == nil {
-		return writeJSON(stdout, map[string]any{"decision": "allow"})
-	}
-	if isLockedTestInStore(st, rel) {
-		return writeJSON(stdout, map[string]any{
-			"decision": "deny",
-			"reason":   fmt.Sprintf("Pre-existing test file %q is locked by Sen; add a new test file via `sen begin --files`.", rel),
-		})
-	}
-
-	openTask := findOpenTask(st)
-	if openTask == nil {
-		return writeJSON(stdout, map[string]any{
-			"decision": "deny",
-			"reason":   "No active SEN task. Run sen intake and sen begin first.",
-		})
-	}
-
-	inScope := false
-	for _, sf := range openTask.ScopeFiles {
-		if nsf, err := workspace.NormalizeRelPath(root, sf); err == nil && workspace.PathKey(nsf) == workspace.PathKey(rel) {
-			inScope = true
-			break
-		}
-	}
-	if !inScope {
-		return writeJSON(stdout, map[string]any{
-			"decision": "deny",
-			"reason":   fmt.Sprintf("File %q is outside active OPEN task %q scope_files %v.", rel, openTask.ID, openTask.ScopeFiles),
-		})
-	}
-	if strings.EqualFold(openTask.RiskAuto, "HIGH") {
-		return writeJSON(stdout, map[string]any{
-			"decision": "force_ask",
-			"reason":   fmt.Sprintf("Active Sen task %q has risk=HIGH; confirm editing %q.", openTask.ID, rel),
-		})
-	}
-	risk, _ := workspace.ComputeRisk([]string{rel}, "FEATURE", root)
-	if risk == "HIGH" {
-		return writeJSON(stdout, map[string]any{
-			"decision": "force_ask",
-			"reason":   fmt.Sprintf("File %q is classified as HIGH risk by Sen.", rel),
-		})
-	}
-	return writeJSON(stdout, map[string]any{"decision": "allow"})
+	return evaluateWriteToolDecision(st, root, toolName, tc.Args, stdout)
 }
 
 // commandTouchesDotSen kiểm tra xem câu lệnh shell có tham chiếu trực tiếp tới thư mục bảo vệ .sen hay không.
@@ -303,29 +262,6 @@ func commandTouchesDotSen(cmdLine string) bool {
 		return false
 	}
 	return reDotSenRef.MatchString(trimmed)
-}
-
-// isLockedTestInStore kiểm tra xem tệp mục tiêu có phải là tệp kiểm thử đã bị khóa trong sổ cái hay không.
-func isLockedTestInStore(st *storage.Store, rel string) bool {
-	if !workspace.IsTestFile(rel) {
-		return false
-	}
-	targetKey := workspace.PathKey(rel)
-	snaps, _ := st.GetSnapshots(workspace.BaselineTaskID)
-	for _, s := range snaps {
-		if s.IsLockedTest && s.ExistedBefore && workspace.PathKey(s.RelPath) == targetKey {
-			return true
-		}
-	}
-	if open := findOpenTask(st); open != nil {
-		tsnaps, _ := st.GetSnapshots(open.ID)
-		for _, s := range tsnaps {
-			if s.IsLockedTest && s.ExistedBefore && workspace.PathKey(s.RelPath) == targetKey {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // findOpenTask trả về con trỏ tới task đang ở trạng thái OPEN (nếu có).

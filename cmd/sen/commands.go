@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -18,42 +19,44 @@ import (
 	"github.com/developerfs0110/Sen-VN/internal/workspace"
 )
 
-// cmdInit khởi tạo sổ cái .sen/state.db, cấu hình mặc định, AGENTS.md, hooks.json và chụp mốc nền __BASELINE__.
+// cmdInit khởi tạo sổ cái .sen/state.db, cấu hình v1.1, cài đặt gói đồng hành/packs, cập nhật (--update) và chụp __BASELINE__.
 func cmdInit(cwd string, args []string, stdout io.Writer) error {
+	reordered := reorderFlagsFirst(args, map[string]bool{"packs": true, "profile": true})
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	withCompanions := fs.Bool("with-companions", false, "report companion discovery")
+	installCompanions := fs.Bool("install-companions", false, "install default companion skills")
+	packsFlag := fs.String("packs", "", "list | all | comma-separated pack names")
+	profileFlag := fs.String("profile", "auto", "auto|code|web|video|media|docs")
+	expressFlag := fs.Bool("express", false, "enable autonomous express mode")
+	updateFlag := fs.Bool("update", false, "check Sen-VN updates and sync installed packages")
 	agyHooks := fs.Bool("agy-hooks", false, "write .agents/hooks.json")
 	overwriteAgents := fs.Bool("overwrite-agents", false, "overwrite AGENTS.md")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reordered); err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Join(cwd, ".sen", "snapshots"), 0o755); err != nil {
-		return err
+	if strings.EqualFold(strings.TrimSpace(*packsFlag), "list") {
+		fmt.Fprint(stdout, bridge.FormatPacksCatalog())
+		return nil
 	}
-	st, err := storage.Open(filepath.Join(cwd, ".sen", "state.db"))
+	if *updateFlag && !*installCompanions && strings.TrimSpace(*packsFlag) == "" {
+		return bridge.RunWorkspaceUpdate(context.Background(), resolveProjectRoot(cwd), stdout)
+	}
+
+	cfg, err := ensureInitWorkspace(cwd, fs, *profileFlag, *expressFlag, *overwriteAgents)
 	if err != nil {
 		return err
 	}
-	defer st.Close()
-
-	cfgPath := filepath.Join(cwd, ".sen", "config.json")
-	if !fileExists(cfgPath) {
-		defaultCfg := Config{
-			Version:          "1.0",
-			AllowedBinaries:  verify.DefaultAllowedBinaries(),
-			ProjectVerifyCmd: detectDefaultVerifyCmd(cwd),
-			TimeoutSeconds:   120,
-		}
-		if err := saveConfig(cwd, defaultCfg); err != nil {
+	if *installCompanions || strings.TrimSpace(*packsFlag) != "" {
+		if _, err := bridge.InstallCompanionsAndPacks(
+			context.Background(), cwd, *installCompanions, *packsFlag, stdout,
+		); err != nil {
 			return err
 		}
 	}
-
-	agentsPath := filepath.Join(cwd, "AGENTS.md")
-	if *overwriteAgents || !fileExists(agentsPath) {
-		if err := os.WriteFile(agentsPath, []byte(bridge.RenderAgentsMD()), 0o644); err != nil {
+	if *updateFlag {
+		if err := bridge.RunWorkspaceUpdate(context.Background(), cwd, stdout); err != nil {
 			return err
 		}
 	}
@@ -64,16 +67,74 @@ func cmdInit(cwd string, args []string, stdout io.Writer) error {
 			return err
 		}
 	}
-
-	if err := workspace.CaptureBaseline(st, cwd); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(stdout, "Initialized Sen MVP in %s\n", cwd)
-	if *withCompanions || comp.AntigravityEnv {
+	resolvedProf := workspace.ResolveDomainProfile(cwd, cfg.DomainProfile)
+	fmt.Fprintf(stdout, "Initialized Sen-VN v%s in %s [profile=%s express=%t]\n",
+		workspace.CurrentVersion, cwd, resolvedProf, cfg.ExpressMode)
+	if *withCompanions || *installCompanions || comp.AntigravityEnv {
 		fmt.Fprintf(stdout, "Companions: %s\n", comp.FormatCompact())
 	}
 	return nil
+}
+
+// ensureInitWorkspace tạo thư mục .sen, mở SQLite state.db, lưu cấu hình có chữ ký, ghi AGENTS.md và chụp __BASELINE__.
+func ensureInitWorkspace(cwd string, fs *flag.FlagSet, profileVal string, expressVal, overwriteAgents bool) (Config, error) {
+	prof, err := workspace.ValidateDomainProfile(profileVal)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := os.MkdirAll(filepath.Join(cwd, ".sen", "snapshots"), 0o755); err != nil {
+		return Config{}, err
+	}
+	st, err := storage.Open(filepath.Join(cwd, ".sen", "state.db"))
+	if err != nil {
+		return Config{}, err
+	}
+	defer st.Close()
+
+	cfg, err := upsertInitConfig(cwd, prof, flagVisited(fs, "profile"), expressVal, flagVisited(fs, "express"))
+	if err != nil {
+		return Config{}, err
+	}
+	agentsPath := filepath.Join(cwd, "AGENTS.md")
+	if overwriteAgents || !fileExists(agentsPath) {
+		if err := os.WriteFile(agentsPath, []byte(bridge.RenderAgentsMD()), 0o644); err != nil {
+			return Config{}, err
+		}
+	}
+	if err := workspace.CaptureBaseline(st, cwd); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// upsertInitConfig khởi tạo mới hoặc cập nhật .sen/config.json với DomainProfile và ExpressMode đã xác thực.
+func upsertInitConfig(cwd, prof string, profVisited, expressVal, expressVisited bool) (Config, error) {
+	cfgPath := filepath.Join(cwd, ".sen", "config.json")
+	if fileExists(cfgPath) {
+		cfg, err := loadConfig(cwd)
+		if err != nil {
+			return Config{}, err
+		}
+		if profVisited {
+			cfg.DomainProfile = prof
+			cfg.ProjectVerifyCmd = detectDefaultVerifyCmd(cwd, workspace.ResolveDomainProfile(cwd, prof))
+		}
+		if expressVisited {
+			cfg.ExpressMode = expressVal
+		}
+		cfg.Version = "1.1"
+		return cfg, saveConfig(cwd, cfg)
+	}
+	resolved := workspace.ResolveDomainProfile(cwd, prof)
+	cfg := Config{
+		Version:          "1.1",
+		AllowedBinaries:  verify.DefaultAllowedBinaries(),
+		ProjectVerifyCmd: detectDefaultVerifyCmd(cwd, resolved),
+		TimeoutSeconds:   120,
+		ExpressMode:      expressVal,
+		DomainProfile:    prof,
+	}
+	return cfg, saveConfig(cwd, cfg)
 }
 
 // cmdBrief xuất bản tóm tắt ngắn (<250 token) cho đầu phiên làm việc hoặc chạy bộ chuyển đổi JSON hook của Antigravity.
@@ -137,7 +198,7 @@ func runHookBrief(root, fallbackEvent string, stdin io.Reader, stdout io.Writer)
 	return bridge.HandleAntigravityHookWithEvent(st, root, fallbackEvent, bytes.NewReader(rawBuf), stdout)
 }
 
-// cmdIntake ghi nhận nguyên văn yêu cầu của người dùng (R1..Rn, R_sec, R_law) hoặc quản lý tối đa 20 luật dự án.
+// cmdIntake ghi nhận nguyên văn yêu cầu của người dùng (R1..Rn, R_sec, R_law), bật/tắt --express hoặc quản lý <= 20 luật dự án.
 func cmdIntake(cwd string, args []string, stdout io.Writer) error {
 	root := resolveProjectRoot(cwd)
 	st, err := openExistingStore(root)
@@ -156,6 +217,7 @@ func cmdIntake(cwd string, args []string, stdout io.Writer) error {
 	bugfix := fs.Bool("bugfix", false, "mark bugfix requirement")
 	sec := fs.Bool("security", false, "anchor R_sec security requirement")
 	vnLaw := fs.Bool("vn-law", false, "anchor R_law legal compliance requirement")
+	express := fs.Bool("express", false, "toggle autonomous express mode")
 	ruleText := fs.String("rule", "", "project rule text (<=20 max)")
 	glob := fs.String("glob", "*", "rule path glob")
 	replaceID := fs.Int64("replace", 0, "replace rule ID")
@@ -163,8 +225,10 @@ func cmdIntake(cwd string, args []string, stdout io.Writer) error {
 	if err := fs.Parse(reordered); err != nil {
 		return err
 	}
+	if err := applyExpressFlagIfVisited(root, fs, *express); err != nil {
+		return err
+	}
 
-	// Tự động nạp câu nhắc nguyên văn từ .sen/last_prompt.txt nếu người gọi bỏ trống --quote.
 	effectiveQuote := strings.TrimSpace(*quote)
 	if effectiveQuote == "" {
 		if b, err := os.ReadFile(filepath.Join(root, ".sen", "last_prompt.txt")); err == nil {
@@ -180,8 +244,8 @@ func cmdIntake(cwd string, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if !didRule && !didReq {
-		return errors.New("specify --req/--security/--vn-law or --rule/--delete")
+	if !didRule && !didReq && !flagVisited(fs, "express") {
+		return errors.New("specify --req/--security/--vn-law, --rule/--delete, or --express")
 	}
 	return nil
 }
@@ -256,7 +320,7 @@ func applyReqIntake(st *storage.Store, root, req, quote string, bugfix, sec, vnL
 	return true, nil
 }
 
-// cmdBegin mở một task mới với phạm vi tệp tường minh, khóa tệp test có sẵn, sao lưu snapshot và tính mức rủi ro tự động.
+// cmdBegin mở một task mới với phạm vi tệp tường minh, khóa tệp test/media gốc, sao lưu snapshot và định cỡ rủi ro 3 tầng.
 func cmdBegin(cwd string, args []string, stdout io.Writer) error {
 	root := resolveProjectRoot(cwd)
 	st, err := openExistingStore(root)
@@ -273,9 +337,13 @@ func cmdBegin(cwd string, args []string, stdout io.Writer) error {
 	reqsCSV := fs.String("reqs", "", "comma-separated requirement IDs")
 	filesCSV := fs.String("files", "", "comma-separated scope file paths")
 	kindFlag := fs.String("kind", "", "feature|bugfix|ui")
-	allowDelete := fs.Bool("allow-delete", false, "permit deleting declared existing scope files (HIGH risk)")
+	allowDelete := fs.Bool("allow-delete", false, "permit deleting declared existing scope files (LARGE risk)")
+	express := fs.Bool("express", false, "toggle autonomous express mode")
 	titleFlag := fs.String("title", "", "task title")
 	if err := fs.Parse(reordered); err != nil {
+		return err
+	}
+	if err := applyExpressFlagIfVisited(root, fs, *express); err != nil {
 		return err
 	}
 	if len(fs.Args()) == 0 {
@@ -285,34 +353,38 @@ func cmdBegin(cwd string, args []string, stdout io.Writer) error {
 	if err := workspace.ValidateTaskID(taskID); err != nil {
 		return err
 	}
-
 	if err := ensureCanOpenNewTask(st, taskID); err != nil {
 		return err
 	}
-	reqIDs, hasBugfixReq, err := resolveBeginReqs(st, *reqsCSV)
+	return createAndSnapshotTask(st, root, taskID, *reqsCSV, *filesCSV, *kindFlag, *titleFlag, *allowDelete, stdout)
+}
+
+// createAndSnapshotTask kiểm tra danh sách yêu cầu, khóa tệp test/media gốc, chụp snapshot và lưu task mới với bậc SMALL/MEDIUM/LARGE.
+func createAndSnapshotTask(
+	st *storage.Store, root, taskID, reqsCSV, filesCSV, kindFlag, titleFlag string, allowDelete bool, stdout io.Writer,
+) error {
+	reqIDs, hasBugfixReq, err := resolveBeginReqs(st, reqsCSV)
 	if err != nil {
 		return err
 	}
-	normFiles, err := resolveBeginFiles(root, *filesCSV)
+	normFiles, err := resolveBeginFiles(root, filesCSV)
 	if err != nil {
 		return err
 	}
-	kind, err := workspace.ValidateKind(*kindFlag)
+	kind, err := workspace.ValidateKind(kindFlag)
 	if err != nil {
 		return err
 	}
-	// Không cho phép hạ cấp yêu cầu sửa lỗi (--bugfix) xuống UI hoặc FEATURE để né kiểm thử.
 	if hasBugfixReq {
 		kind = "BUGFIX"
 	} else if kind == "" {
 		kind = "FEATURE"
 	}
-
-	if err := workspace.BeginTaskSnapshotWithOpts(st, root, taskID, normFiles, *allowDelete); err != nil {
+	if err := workspace.BeginTaskSnapshotWithOpts(st, root, taskID, normFiles, allowDelete); err != nil {
 		return err
 	}
-	risk, reasons := workspace.ComputeRiskWithOpts(normFiles, kind, *allowDelete, root)
-	title := strings.TrimSpace(*titleFlag)
+	risk, reasons := workspace.ComputeRiskWithOpts(normFiles, kind, allowDelete, root)
+	title := strings.TrimSpace(titleFlag)
 	if title == "" {
 		title = fmt.Sprintf("%s (%s)", taskID, strings.Join(reqIDs, ","))
 	}
@@ -322,7 +394,6 @@ func cmdBegin(cwd string, args []string, stdout io.Writer) error {
 	}); err != nil {
 		return err
 	}
-
 	fmt.Fprintf(stdout, "Opened task %s [kind=%s risk=%s reqs=%v files=%v]\n", taskID, kind, risk, reqIDs, normFiles)
 	if len(reasons) > 0 {
 		fmt.Fprintf(stdout, "Risk factors: %s\n", strings.Join(reasons, "; "))

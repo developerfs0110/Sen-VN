@@ -1,4 +1,4 @@
-// Package workspace quản lý kiểm tra an toàn đường dẫn, đánh giá rủi ro tự động, sao lưu snapshot và hoàn tác từng byte.
+// Package workspace quản lý kiểm tra an toàn đường dẫn, phân bậc rủi ro SMALL/MEDIUM/LARGE, sao lưu snapshot và hoàn tác từng byte.
 package workspace
 
 import (
@@ -13,7 +13,7 @@ import (
 // reValidTaskID chỉ cho phép chữ cái, chữ số và các ký tự . _ - để triệt tiêu nguy cơ leo thang thư mục (path traversal).
 var reValidTaskID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
-// exactHighRiskFiles liệt kê các tệp cấu hình/khóa phụ thuộc luôn được phân loại rủi ro mức HIGH.
+// exactHighRiskFiles liệt kê các tệp cấu hình/khóa phụ thuộc luôn được phân loại rủi ro mức LARGE.
 var exactHighRiskFiles = map[string]bool{
 	"go.mod":            true,
 	"go.sum":            true,
@@ -35,6 +35,14 @@ var highRiskTokens = []string{
 	"secret",
 	"credential",
 	"payment",
+}
+
+// rawMediaDirNames liệt kê các thư mục chứa tư liệu video/âm thanh/ảnh gốc bất biến không bao giờ được ghi đè.
+var rawMediaDirNames = map[string]bool{
+	"raw":       true,
+	"master":    true,
+	"footage":   true,
+	"originals": true,
 }
 
 // ValidateTaskID kiểm tra nghiêm ngặt khuôn dạng mã task và chặn các mã dành riêng của hệ thống.
@@ -153,15 +161,42 @@ func IsTestFile(relPath string) bool {
 	}
 }
 
-// ComputeRisk tính mức rủi ro tất định (LOW, MEDIUM, HIGH) cho danh sách tệp phạm vi không kèm cờ xóa.
+// IsLockedRawMedia kiểm tra xem đường dẫn có nằm trong các thư mục tư liệu gốc bất biến (raw, master, footage, originals) hay không.
+func IsLockedRawMedia(relPath string) bool {
+	clean := strings.Trim(filepath.ToSlash(strings.ReplaceAll(relPath, "\\", "/")), "/")
+	parts := strings.Split(clean, "/")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, dirSeg := range parts[:len(parts)-1] {
+		if rawMediaDirNames[strings.ToLower(strings.TrimSpace(dirSeg))] {
+			return true
+		}
+	}
+	return false
+}
+
+// IsLockedAsset xác định tệp có thuộc diện khóa bất biến (tệp kiểm thử có sẵn hoặc tư liệu gốc raw/master) hay không.
+func IsLockedAsset(relPath string) bool {
+	return IsTestFile(relPath) || IsLockedRawMedia(relPath)
+}
+
+// IsDestructiveOrCriticalFile kiểm tra xem tệp mục tiêu có chạm vào đường dẫn nhạy cảm, cấu hình trọng yếu hoặc tư liệu gốc hay không.
+func IsDestructiveOrCriticalFile(workspaceRoot, raw string) (bool, string) {
+	reason := fileHighRiskReason(workspaceRoot, raw)
+	return reason != "", reason
+}
+
+// ComputeRisk tính phân bậc bài toán 3 mức (SMALL, MEDIUM, LARGE) cho danh sách tệp phạm vi không kèm cờ xóa.
 func ComputeRisk(files []string, kind string, workspaceRoot string) (string, []string) {
 	return ComputeRiskWithOpts(files, kind, false, workspaceRoot)
 }
 
-// ComputeRiskWithOpts phân loại rủi ro tất định dựa trên loại task, quyền xóa tệp, số lượng tệp và đường dẫn nhạy cảm.
+// ComputeRiskWithOpts phân loại bài toán thành SMALL, MEDIUM hoặc LARGE dựa trên loại task, quyền xóa, số tệp và đường dẫn trọng yếu.
 func ComputeRiskWithOpts(files []string, kind string, allowDelete bool, workspaceRoot string) (string, []string) {
 	var reasons []string
-	if strings.EqualFold(strings.TrimSpace(kind), "BUGFIX") {
+	normKind := strings.ToUpper(strings.TrimSpace(kind))
+	if normKind == "BUGFIX" {
 		reasons = append(reasons, "kind=BUGFIX")
 	}
 	if allowDelete {
@@ -176,19 +211,39 @@ func ComputeRiskWithOpts(files []string, kind string, allowDelete bool, workspac
 		}
 	}
 	if len(reasons) > 0 {
-		return "HIGH", reasons
+		return "LARGE", reasons
 	}
 	if len(files) >= 3 {
-		return "MEDIUM", []string{fmt.Sprintf("scope_files=%d (>=3)", len(files))}
+		return "MEDIUM", []string{fmt.Sprintf("scope_files=%d (3..5)", len(files))}
 	}
-	return "LOW", nil
+	if normKind == "FEATURE" && len(files) >= 2 && countDistinctParentDirs(workspaceRoot, files) >= 2 {
+		return "MEDIUM", []string{"cross-directory feature (>=2 dirs)"}
+	}
+	return "SMALL", nil
 }
 
-// fileHighRiskReason trả về lý do nếu đường dẫn chạm tới tệp cấu hình, CI/CD, SQL hoặc phân hệ trọng yếu.
+// countDistinctParentDirs đếm số thư mục cha khác biệt trong phạm vi tệp để nhận diện tính năng liên mô-đun.
+func countDistinctParentDirs(workspaceRoot string, files []string) int {
+	dirs := make(map[string]bool)
+	for _, raw := range files {
+		rel, err := NormalizeRelPath(workspaceRoot, raw)
+		if err != nil {
+			rel = filepath.ToSlash(raw)
+		}
+		parent := filepath.ToSlash(filepath.Dir(filepath.FromSlash(rel)))
+		dirs[PathKey(parent)] = true
+	}
+	return len(dirs)
+}
+
+// fileHighRiskReason trả về lý do nếu đường dẫn chạm tới tệp cấu hình, CI/CD, SQL, tư liệu gốc hoặc phân hệ nhạy cảm.
 func fileHighRiskReason(workspaceRoot, raw string) string {
 	rel, err := NormalizeRelPath(workspaceRoot, raw)
 	if err != nil {
 		rel = filepath.ToSlash(raw)
+	}
+	if IsLockedRawMedia(rel) {
+		return fmt.Sprintf("immutable raw/master media %s", rel)
 	}
 	lower := strings.ToLower(rel)
 	base := strings.ToLower(filepath.Base(rel))

@@ -1,4 +1,4 @@
-// Tệp snapshot.go xử lý quét cây thư mục độc lập với Git, chặn symlink/junction, sao lưu <=10MB và nâng mốc __BASELINE__.
+// Tệp snapshot.go xử lý quét cây thư mục độc lập với Git, chặn symlink/junction, khóa tư liệu gốc và sao lưu <=10MB.
 package workspace
 
 import (
@@ -101,14 +101,14 @@ func scanWorkspaceFiles(root string) (map[string]storage.Snapshot, []storage.Sna
 	return byKey, list, err
 }
 
-// buildFileSnapshot tính SHA-256 cho tệp <=10MB; với tệp lớn hơn chỉ ghi nhận kích thước và thời gian sửa đổi (mtime_ns).
+// buildFileSnapshot tính SHA-256 cho tệp <=10MB; khóa bất biến cả tệp kiểm thử và tư liệu gốc (raw/master/footage/originals).
 func buildFileSnapshot(fullPath, rel string, info fs.FileInfo) (storage.Snapshot, error) {
 	sn := storage.Snapshot{
 		RelPath:       rel,
 		ExistedBefore: true,
 		OrigSize:      info.Size(),
 		OrigMtimeNS:   info.ModTime().UnixNano(),
-		IsLockedTest:  IsTestFile(rel),
+		IsLockedTest:  IsLockedAsset(rel),
 	}
 	if info.Size() > MaxSnapshotBytes {
 		return sn, nil
@@ -168,12 +168,12 @@ func CaptureBaseline(st *storage.Store, root string) error {
 	return st.ReplaceSnapshots(BaselineTaskID, list)
 }
 
-// BeginTaskSnapshot khóa toàn bộ tệp kiểm thử có sẵn và sao lưu các tệp thuộc phạm vi khai báo (mặc định cấm xóa tệp).
+// BeginTaskSnapshot khóa toàn bộ tệp kiểm thử và tư liệu gốc có sẵn, đồng thời sao lưu các tệp thuộc phạm vi khai báo.
 func BeginTaskSnapshot(st *storage.Store, root, taskID string, scopeFiles []string) error {
 	return BeginTaskSnapshotWithOpts(st, root, taskID, scopeFiles, false)
 }
 
-// BeginTaskSnapshotWithOpts thiết lập ảnh chụp trước khi sửa mã, từ chối đưa tệp test có sẵn vào --files.
+// BeginTaskSnapshotWithOpts thiết lập ảnh chụp trước khi sửa mã, từ chối đưa tệp test hoặc tư liệu gốc có sẵn vào --files.
 func BeginTaskSnapshotWithOpts(st *storage.Store, root, taskID string, scopeFiles []string, allowDelete bool) error {
 	if err := ValidateTaskID(taskID); err != nil {
 		return err
@@ -188,6 +188,9 @@ func BeginTaskSnapshotWithOpts(st *storage.Store, root, taskID string, scopeFile
 	}
 	for _, rel := range normScope {
 		if existing, ok := currentByKey[PathKey(rel)]; ok && existing.IsLockedTest {
+			if IsLockedRawMedia(rel) {
+				return fmt.Errorf("pre-existing raw/master media file %q is locked (immutable) and cannot be modified", rel)
+			}
 			return fmt.Errorf("pre-existing test file %q is locked and cannot be listed in --files", rel)
 		}
 	}
@@ -234,7 +237,7 @@ func normalizeAndValidateScope(root string, scopeFiles []string) ([]string, erro
 	return normScope, nil
 }
 
-// collectTaskSnapshots sao lưu các tệp test bị khóa cùng các tệp phạm vi <=10MB vào .sen/snapshots/<task_id>/.
+// collectTaskSnapshots sao lưu các tài sản bị khóa và các tệp phạm vi <=10MB vào .sen/snapshots/<task_id>/.
 func collectTaskSnapshots(
 	root, taskID, snapBaseDir string,
 	normScope []string,
@@ -250,7 +253,7 @@ func collectTaskSnapshots(
 		if item.OrigSize <= MaxSnapshotBytes {
 			bkp := filepath.Join(snapBaseDir, "__locked__", filepath.FromSlash(item.RelPath))
 			if err := copyFileBytes(filepath.Join(root, filepath.FromSlash(item.RelPath)), bkp); err != nil {
-				return nil, fmt.Errorf("backup locked test %s: %w", item.RelPath, err)
+				return nil, fmt.Errorf("backup locked asset %s: %w", item.RelPath, err)
 			}
 			item.BackupPath = bkp
 		}
@@ -277,7 +280,7 @@ func collectTaskSnapshots(
 	return snaps, nil
 }
 
-// AdvanceBaseline nâng mốc __BASELINE__ chỉ cho đúng các tệp thuộc task vừa VERIFIED và tự khóa các tệp test mới viết.
+// AdvanceBaseline nâng mốc __BASELINE__ chỉ cho đúng các tệp thuộc task vừa VERIFIED và tự khóa tệp test/raw mới phát sinh.
 func AdvanceBaseline(st *storage.Store, root string, scopeFiles []string) error {
 	for _, raw := range scopeFiles {
 		rel, err := NormalizeRelPath(root, raw)

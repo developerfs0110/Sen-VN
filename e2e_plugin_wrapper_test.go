@@ -23,7 +23,7 @@ func copyTreeFiltered(t *testing.T, srcRoot, dstRoot string) {
 			return err
 		}
 		top := strings.Split(filepath.ToSlash(rel), "/")[0]
-		if top == ".git" || top == ".sen" || top == ".cache" || rel == "sen.exe" || rel == "sen" {
+		if top == ".git" || top == ".sen" || top == ".cache" || top == ".agents" || rel == "sen.exe" || rel == "sen" {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -65,7 +65,7 @@ func assertPluginManifestAndFiles(t *testing.T) map[string]any {
 	if err := json.Unmarshal(rawPlugin, &manifest); err != nil {
 		t.Fatalf("invalid plugin.json: %v", err)
 	}
-	if manifest["name"] != "sen-vn" || manifest["version"] != "1.0.0" || manifest["repository"] != "https://github.com/developerfs0110/Sen-VN" {
+	if manifest["name"] != "sen-vn" || manifest["version"] != "1.1.0" || manifest["repository"] != "https://github.com/developerfs0110/Sen-VN" {
 		t.Fatalf("unexpected plugin.json metadata: %+v", manifest)
 	}
 
@@ -88,8 +88,11 @@ func assertPluginManifestAndFiles(t *testing.T) map[string]any {
 	}
 
 	for _, reqFile := range []string{
+		"packages.lock.json",
 		filepath.Join("rules", "AGENTS.md"),
 		filepath.Join("skills", "sen-setup", "SKILL.md"),
+		filepath.Join("skills", "sen-dialectical", "SKILL.md"),
+		filepath.Join("skills", "sen-skill-capture", "SKILL.md"),
 		filepath.Join("bin", "sen"),
 		filepath.Join("bin", "sen.cmd"),
 		filepath.Join("scripts", "install-sen.sh"),

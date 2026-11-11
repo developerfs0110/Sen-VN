@@ -1,18 +1,26 @@
 #!/usr/bin/env sh
-# Trình cài đặt CLI `sen` cho macOS và Linux kèm xác thực chữ ký SHA-256 qua HTTPS (UTF-8 không BOM, chuẩn LF).
+# Trình cài đặt và cập nhật CLI `sen` v1.1.0 cho macOS và Linux kèm xác thực SHA-256 qua HTTPS (UTF-8 không BOM, chuẩn LF).
 set -eu
 
 REPO="developerfs0110/Sen-VN"
 SOURCE=""
 EXPECTED_SHA256=""
 INSTALL_DIR="${HOME}/.local/bin"
+WORKSPACE=""
+PACKS=""
+SKIP_COMPANIONS="0"
+UPDATE_MODE="0"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --repo)        REPO="$2"; shift 2 ;;
-        --source)      SOURCE="$2"; shift 2 ;;
-        --sha256)      EXPECTED_SHA256="$2"; shift 2 ;;
-        --install-dir) INSTALL_DIR="$2"; shift 2 ;;
+        --repo)            REPO="$2"; shift 2 ;;
+        --source)          SOURCE="$2"; shift 2 ;;
+        --sha256)          EXPECTED_SHA256="$2"; shift 2 ;;
+        --install-dir)     INSTALL_DIR="$2"; shift 2 ;;
+        --workspace)       WORKSPACE="$2"; shift 2 ;;
+        --packs)           PACKS="$2"; shift 2 ;;
+        --skip-companions) SKIP_COMPANIONS="1"; shift 1 ;;
+        --update)          UPDATE_MODE="1"; shift 1 ;;
         *) echo "Unknown flag: $1" >&2; exit 1 ;;
     esac
 done
@@ -91,3 +99,23 @@ fi
 cp "$SRC_FILE" "$INSTALL_DIR/sen"
 chmod +x "$INSTALL_DIR/sen"
 echo "Installed sen successfully at: $INSTALL_DIR/sen"
+
+# Khởi tạo hoặc đồng bộ ngay không gian làm việc cùng các gói kỹ năng nếu người dùng chỉ định --workspace.
+if [ -n "$WORKSPACE" ]; then
+    mkdir -p "$WORKSPACE"
+    if [ "$UPDATE_MODE" = "1" ] && [ -f "$WORKSPACE/.sen/state.db" ] && [ -z "$PACKS" ]; then
+        (cd "$WORKSPACE" && "$INSTALL_DIR/sen" init --update)
+    else
+        set -- init
+        if [ "$SKIP_COMPANIONS" = "0" ]; then
+            set -- "$@" --install-companions
+        fi
+        if [ -n "$PACKS" ]; then
+            set -- "$@" --packs "$PACKS"
+        fi
+        if [ "$UPDATE_MODE" = "1" ]; then
+            set -- "$@" --update
+        fi
+        (cd "$WORKSPACE" && "$INSTALL_DIR/sen" "$@")
+    fi
+fi

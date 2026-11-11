@@ -21,6 +21,9 @@ func TestCLIFrozenEightCommandsRejectsUnknown(t *testing.T) {
 			t.Errorf("expected usage output to list frozen command %q, got:\n%s", cmd, errBuf.String())
 		}
 	}
+	if codeUpd := RunInDir(dir, []string{"update"}, strings.NewReader(""), &out, &errBuf); codeUpd != 1 {
+		t.Fatalf("expected top-level 'update' command to be rejected (8-command freeze), got %d", codeUpd)
+	}
 }
 
 func TestCLIInitIntakeBeginStatusAndRuleCap(t *testing.T) {
@@ -47,9 +50,11 @@ func TestCLIInitIntakeBeginStatusAndRuleCap(t *testing.T) {
 		t.Fatalf("expected .agents/hooks.json created: %v", err)
 	}
 
-	// Test positional arg BEFORE flags in `sen begin T1 --reqs R1 --files ...`
 	mustOK("intake", "--quote", "Update greeting and check security", "--req", "Update Greet", "--security")
-	mustOK("begin", "T1", "--reqs", "R1,R_sec", "--files", "hello.go,hello_test.go", "--kind", "feature")
+	beginOut := mustOK("begin", "T1", "--reqs", "R1,R_sec", "--files", "hello.go,hello_test.go", "--kind", "feature")
+	if !strings.Contains(beginOut, "risk=SMALL") {
+		t.Fatalf("expected 2-file feature task to be risk=SMALL, got: %s", beginOut)
+	}
 
 	statusOut := mustOK("status", "--approve")
 	if !strings.Contains(statusOut, "R1") || !strings.Contains(statusOut, "R_sec") || !strings.Contains(statusOut, "T1") {
@@ -57,3 +62,42 @@ func TestCLIInitIntakeBeginStatusAndRuleCap(t *testing.T) {
 	}
 }
 
+func TestCLIV11PacksListProfileExpressAndConfigTamper(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Pure Docs Project\n"), 0o644)
+
+	var out, errBuf bytes.Buffer
+	if code := RunInDir(dir, []string{"init", "--packs", "list"}, strings.NewReader(""), &out, &errBuf); code != 0 {
+		t.Fatalf("init --packs list failed: %s", errBuf.String())
+	}
+	if !strings.Contains(out.String(), "superpowers") || !strings.Contains(out.String(), "media-video") {
+		t.Fatalf("unexpected packs catalog output:\n%s", out.String())
+	}
+	// --packs list must not initialize .sen/state.db prematurely.
+	if _, err := os.Stat(filepath.Join(dir, ".sen", "state.db")); !os.IsNotExist(err) {
+		t.Fatalf("expected --packs list not to create .sen/state.db")
+	}
+
+	out.Reset()
+	errBuf.Reset()
+	if code := RunInDir(dir, []string{"init", "--profile", "docs", "--express"}, strings.NewReader(""), &out, &errBuf); code != 0 {
+		t.Fatalf("init --profile docs --express failed: %s", errBuf.String())
+	}
+
+	out.Reset()
+	errBuf.Reset()
+	if code := RunInDir(dir, []string{"status"}, strings.NewReader(""), &out, &errBuf); code != 0 {
+		t.Fatalf("status failed: %s", errBuf.String())
+	}
+	if !strings.Contains(out.String(), "Profile: docs") || !strings.Contains(out.String(), "Express: on") {
+		t.Fatalf("expected Profile: docs | Express: on in status, got:\n%s", out.String())
+	}
+
+	// Removing .sen/config.sha256 must trigger tampering error on config load!
+	_ = os.Remove(filepath.Join(dir, ".sen", "config.sha256"))
+	out.Reset()
+	errBuf.Reset()
+	if code := RunInDir(dir, []string{"done"}, strings.NewReader(""), &out, &errBuf); code == 0 || !strings.Contains(errBuf.String(), "tampering") {
+		t.Fatalf("expected missing config.sha256 to fail with tampering error, got code=%d stderr=%s", code, errBuf.String())
+	}
+}

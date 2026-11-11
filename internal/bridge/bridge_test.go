@@ -2,8 +2,12 @@ package bridge_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -83,7 +87,7 @@ func TestAntigravityHooksAllFourEventsAndUninitializedSafety(t *testing.T) {
 	}
 	if err := st.SaveTask(storage.Task{
 		ID: "T-AUTH", ReqIDs: []string{"R1"}, Title: "auth", Kind: "FEATURE",
-		RiskAuto: "HIGH", ScopeFiles: []string{"auth.go"}, Status: "OPEN",
+		RiskAuto: "LARGE", ScopeFiles: []string{"auth.go"}, Status: "OPEN",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -284,4 +288,194 @@ func TestPluginHookResolvesPayloadCwdSeparateFromPluginRoot(t *testing.T) {
 		t.Fatalf("expected user workspace locked test denied, got: %s", out.String())
 	}
 }
+
+// TestExpressHooksRawMediaFFmpegGuardAndQuarantineStop kiểm chứng --express, chống sửa config.json, chặn ffmpeg ghi đè raw và thoát Stop khi QUARANTINE.
+func TestExpressHooksRawMediaFFmpegGuardAndQuarantineStop(t *testing.T) {
+	root := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, "raw"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "raw", "clip.mp4"), []byte("RAW_BYTES"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "svc.go"), []byte("package svc\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".env"), []byte("PORT=8080\n"), 0o644)
+
+	st, err := storage.Open(filepath.Join(root, ".sen", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	_ = workspace.CaptureBaseline(st, root)
+	_ = st.CreateTask(storage.Task{
+		ID: "T-EXP", ReqIDs: []string{"R1"}, Title: "exp", Kind: "BUGFIX",
+		RiskAuto: "LARGE", ScopeFiles: []string{"svc.go", ".env"}, Status: "OPEN",
+	})
+	_ = workspace.BeginTaskSnapshot(st, root, "T-EXP", []string{"svc.go", ".env"})
+
+	// Bật cấu hình hợp lệ với express_mode=true kèm chữ ký SHA-256.
+	if err := bridge.WriteSignedRuntimeConfig(root, true, "auto"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	// 1. PreInvocation phát hiện "Làm luôn đi" -> nhắc truyền --express.
+	in := `{"hookEventName":"PreInvocation","invocationNum":1,"lastUserInput":"Sửa lỗi svc.go, làm luôn đi nhé"}`
+	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
+	if !strings.Contains(out.String(), "--express") {
+		t.Fatalf("expected PreInvocation to mention --express for 'làm luôn đi', got: %s", out.String())
+	}
+
+	// 2. express_mode=true cho phép ("allow") sửa svc.go dù task thuộc bậc LARGE (BUGFIX), nhưng vẫn "force_ask" trên .env!
+	out.Reset()
+	in = `{"hookEventName":"PreToolUse","toolCall":{"name":"edit_file","args":{"Path":"svc.go"}}}`
+	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
+	if !strings.Contains(out.String(), `"allow"`) {
+		t.Fatalf("expected express_mode=true to allow non-destructive LARGE edit on svc.go, got: %s", out.String())
+	}
+
+	out.Reset()
+	in = `{"hookEventName":"PreToolUse","toolCall":{"name":"edit_file","args":{"Path":".env"}}}`
+	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
+	if !strings.Contains(out.String(), `"force_ask"`) {
+		t.Fatalf("expected express_mode=true to brake with force_ask on critical .env file, got: %s", out.String())
+	}
+
+	// 3. Chặn lệnh ffmpeg ghi đè trực tiếp tư liệu gốc raw/clip.mp4 trong PreToolUse!
+	out.Reset()
+	in = `{"hookEventName":"PreToolUse","toolCall":{"name":"run_command","args":{"CommandLine":"ffmpeg -y -i raw/clip.mp4 raw/clip.mp4"}}}`
+	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
+	if !strings.Contains(out.String(), `"deny"`) {
+		t.Fatalf("expected PreToolUse to deny ffmpeg overwriting raw/clip.mp4, got: %s", out.String())
+	}
+
+	// 4. Sửa trộm .sen/config.json không cập nhật config.sha256 -> bị từ chối ("deny") ngay!
+	_ = os.WriteFile(filepath.Join(root, ".sen", "config.json"), []byte(`{"version":"1.1","express_mode":true}`), 0o644)
+	out.Reset()
+	in = `{"hookEventName":"PreToolUse","toolCall":{"name":"edit_file","args":{"Path":"svc.go"}}}`
+	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
+	if !strings.Contains(out.String(), `"deny"`) || !strings.Contains(out.String(), "tampering") {
+		t.Fatalf("expected tampered config.json to be denied, got: %s", out.String())
+	}
+	_ = bridge.WriteSignedRuntimeConfig(root, true, "video")
+
+	// 5. Khi task chạm ngưỡng 3/3 lần verify lỗi liên tiếp (QUARANTINE), Stop hook trả về "allow" thay vì lặp vô tận!
+	for i := 0; i < 3; i++ {
+		_, _ = st.AppendEvidence("T-EXP", "go test ./...", "TEST", 0, 1, "fail")
+	}
+	out.Reset()
+	in = `{"hookEventName":"Stop","terminationReason":"NO_TOOL_CALL"}`
+	_ = bridge.HandleAntigravityHook(st, root, strings.NewReader(in), &out)
+	if !strings.Contains(out.String(), `"allow"`) {
+		t.Fatalf("expected Stop hook to return allow when OPEN task is in QUARANTINE (3/3), got: %s", out.String())
+	}
+	brief := bridge.FormatBrief(st, root, "")
+	if !strings.Contains(brief, "QUARANTINE (3/3 failed verifies)") || !strings.Contains(brief, "profile=video") {
+		t.Fatalf("expected FormatBrief to display QUARANTINE and profile=video, got:\n%s", brief)
+	}
+}
+
+// initLocalGitSkillRepo khởi tạo một kho Git cục bộ thật chứa tệp SKILL.md và trả về mã băm commit HEAD 40 ký tự.
+func initLocalGitSkillRepo(t *testing.T, subPath, body string) (string, string) {
+	t.Helper()
+	repoDir := t.TempDir()
+	runGit := func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v (%s)", args, err, string(out))
+		}
+		return strings.TrimSpace(string(out))
+	}
+	runGit("init")
+	runGit("config", "user.email", "test@sen-vn.local")
+	runGit("config", "user.name", "Sen Test")
+	target := filepath.Join(repoDir, filepath.FromSlash(subPath), "SKILL.md")
+	_ = os.MkdirAll(filepath.Dir(target), 0o755)
+	_ = os.WriteFile(target, []byte(body), 0o644)
+	runGit("add", ".")
+	runGit("commit", "-m", "seed skill")
+	return repoDir, runGit("rev-parse", "HEAD")
+}
+
+// TestPackagesFallbackInstallAndWorkspaceUpdateWithRollback kiểm chứng fallback sang fork khi nguồn chính chết và cập nhật --update có rollback .bak.
+func TestPackagesFallbackInstallAndWorkspaceUpdateWithRollback(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	fbRepo, commitV1 := initLocalGitSkillRepo(t, "skills/ffmpeg-skill", "# FFmpeg Skill v1\n")
+	deadPrimary := filepath.Join(t.TempDir(), "dead-nonexistent-primary.git")
+
+	overrides := map[string]bridge.PackageURLOverride{
+		"ffmpeg-skill": {PrimaryURL: deadPrimary, FallbackURL: fbRepo, PinnedCommit: commitV1},
+	}
+	ovBytes, _ := json.Marshal(overrides)
+	t.Setenv("SEN_PACKAGE_URL_OVERRIDES", string(ovBytes))
+
+	ws := t.TempDir()
+	var out bytes.Buffer
+	res, err := bridge.InstallCompanionsAndPacks(context.Background(), ws, false, "workflow-diagram,voice-tts,media-video", &out)
+	if err != nil {
+		t.Fatalf("InstallCompanionsAndPacks failed: %v\n%s", err, out.String())
+	}
+	if len(res) < 4 {
+		t.Fatalf("expected >=4 installed items (archify, voicestudio, ffmpeg-skill, video-subtitles-effects), got %d", len(res))
+	}
+	gotCommit, err := os.ReadFile(filepath.Join(ws, ".agents", "skills", "ffmpeg-skill", ".sen-commit"))
+	if err != nil || strings.TrimSpace(string(gotCommit)) != commitV1 {
+		t.Fatalf("expected fallback repo commit %s installed, got %q (err=%v)", commitV1, string(gotCommit), err)
+	}
+
+	// Kiểm chứng sen init --update qua mock httptest.NewServer + rollback từ .bak nếu commit mới bị lỗi!
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"tag_name":"v1.2.0","html_url":"https://github.com/developerfs0110/Sen-VN/releases/tag/v1.2.0"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SEN_UPDATE_API_URL", srv.URL)
+
+	// Gây lỗi cập nhật bằng mã commit không tồn tại -> phải tự khôi phục bản v1 nguyên vẹn từ .bak!
+	badOverrides := map[string]bridge.PackageURLOverride{
+		"ffmpeg-skill": {PrimaryURL: deadPrimary, FallbackURL: fbRepo, PinnedCommit: strings.Repeat("f", 40)},
+	}
+	badBytes, _ := json.Marshal(badOverrides)
+	t.Setenv("SEN_PACKAGE_URL_OVERRIDES", string(badBytes))
+
+	out.Reset()
+	if err := bridge.RunWorkspaceUpdate(context.Background(), ws, &out); err == nil {
+		t.Fatalf("expected RunWorkspaceUpdate to fail on bogus commit and trigger rollback")
+	}
+	restoredMD, err := os.ReadFile(filepath.Join(ws, ".agents", "skills", "ffmpeg-skill", "SKILL.md"))
+	if err != nil || string(restoredMD) != "# FFmpeg Skill v1\n" {
+		t.Fatalf("expected .bak atomic rollback to preserve FFmpeg Skill v1, got %q (err=%v)", string(restoredMD), err)
+	}
+
+	// Tạo commit v2 hợp lệ trên kho fallback -> RunWorkspaceUpdate nâng cấp thành công và báo có bản v1.2.0!
+	_ = os.WriteFile(filepath.Join(fbRepo, "skills", "ffmpeg-skill", "SKILL.md"), []byte("# FFmpeg Skill v2\n"), 0o644)
+	cmdAdd := exec.Command("git", "add", ".")
+	cmdAdd.Dir = fbRepo
+	_ = cmdAdd.Run()
+	cmdCom := exec.Command("git", "commit", "-m", "v2")
+	cmdCom.Dir = fbRepo
+	_ = cmdCom.Run()
+	revOut, _ := exec.Command("git", "-C", fbRepo, "rev-parse", "HEAD").Output()
+	commitV2 := strings.TrimSpace(string(revOut))
+
+	okOverrides := map[string]bridge.PackageURLOverride{
+		"ffmpeg-skill": {PrimaryURL: deadPrimary, FallbackURL: fbRepo, PinnedCommit: commitV2},
+	}
+	okBytes, _ := json.Marshal(okOverrides)
+	t.Setenv("SEN_PACKAGE_URL_OVERRIDES", string(okBytes))
+
+	out.Reset()
+	if err := bridge.RunWorkspaceUpdate(context.Background(), ws, &out); err != nil {
+		t.Fatalf("RunWorkspaceUpdate v2 failed: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "v1.2.0") {
+		t.Fatalf("expected update check output to report v1.2.0, got:\n%s", out.String())
+	}
+	updatedMD, _ := os.ReadFile(filepath.Join(ws, ".agents", "skills", "ffmpeg-skill", "SKILL.md"))
+	if string(updatedMD) != "# FFmpeg Skill v2\n" {
+		t.Fatalf("expected skill updated to v2, got %q", string(updatedMD))
+	}
+}
+
+
 

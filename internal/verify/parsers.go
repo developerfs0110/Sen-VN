@@ -1,4 +1,4 @@
-// Package verify thực thi kiểm chứng nhị phân trực tiếp, chặn bộ kiểm thử rỗng và đánh giá cổng nghiệm thu cuối cùng.
+// Package verify thực thi kiểm chứng nhị phân trực tiếp, chặn bộ kiểm thử/media rỗng và đánh giá cổng nghiệm thu cuối cùng.
 package verify
 
 import (
@@ -22,11 +22,12 @@ var (
 	reGenericPass  = regexp.MustCompile(`(?i)(\d+)\s+passed`)
 )
 
-// DefaultAllowedBinaries trả về danh sách trắng các trình kiểm thử và biên dịch an toàn mặc định.
+// DefaultAllowedBinaries trả về danh sách trắng các trình kiểm thử, kiểm định media, tài liệu và biên dịch an toàn mặc định.
 func DefaultAllowedBinaries() []string {
 	return []string{
 		"go", "pytest", "jest", "vitest", "npm", "npx",
 		"pnpm", "tsc", "cargo", "dotnet", "ffprobe", "magick",
+		"markdownlint", "pandoc",
 	}
 }
 
@@ -38,7 +39,7 @@ var forbiddenShells = map[string]bool{
 
 // nodeShimAllowlist liệt kê các công cụ hệ sinh thái Node.js hợp lệ vốn phân phối qua tệp .cmd trên Windows.
 var nodeShimAllowlist = map[string]bool{
-	"npm": true, "npx": true, "pnpm": true, "jest": true, "vitest": true, "tsc": true,
+	"npm": true, "npx": true, "pnpm": true, "jest": true, "vitest": true, "tsc": true, "markdownlint": true,
 }
 
 // NormalizeBinName chuẩn hóa tên tệp thực thi về chữ thường và lược bỏ phần mở rộng .exe/.cmd/.bat.
@@ -140,7 +141,7 @@ func isWithinDir(targetPath, dirPath string) bool {
 	return slash != ".." && !strings.HasPrefix(slash, "../") && filepath.VolumeName(rel) == ""
 }
 
-// classifyRunner phân loại độ mạnh của lệnh kiểm chứng thành TEST, BUILD hoặc RUN kèm loại bộ chạy kiểm thử.
+// classifyRunner phân loại độ mạnh của lệnh kiểm chứng thành TEST, MEDIA, BUILD hoặc RUN kèm tên bộ phân tích.
 func classifyRunner(normBin string, args []string) (string, string) {
 	first := ""
 	if len(args) > 0 {
@@ -149,6 +150,8 @@ func classifyRunner(normBin string, args []string) (string, string) {
 	joined := strings.ToLower(strings.Join(args, " "))
 
 	switch normBin {
+	case "ffprobe":
+		return "MEDIA", "ffprobe"
 	case "go":
 		if first == "test" {
 			return "TEST", "go"
@@ -195,9 +198,12 @@ func classifyRunner(normBin string, args []string) (string, string) {
 	}
 }
 
-// ParseTestRun phân tích kết quả đầu ra và từ chối gian lận khi lệnh TEST trả mã 0 nhưng không chạy bài kiểm thử nào.
+// ParseTestRun phân tích đầu ra TEST/MEDIA và từ chối gian lận khi lệnh trả mã 0 nhưng không có bài test hoặc luồng hợp lệ.
 func ParseTestRun(bin string, args []string, stdout string, exitCode int) (string, int, error) {
 	strength, runner := classifyRunner(NormalizeBinName(bin), args)
+	if strength == "MEDIA" {
+		return parseFFprobeOutput(stdout, exitCode)
+	}
 	if strength != "TEST" {
 		return strength, 0, nil
 	}
