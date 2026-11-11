@@ -1,0 +1,33 @@
+{
+  "sen-mvp": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "\"./bin/sen\" brief --hook SessionStart"
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "\"./bin/sen\" brief --hook PreInvocation"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"./bin/sen\" brief --hook PreToolUse"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "\"./bin/sen\" brief --hook Stop"
+      }
+    ]
+  }
+}

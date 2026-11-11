@@ -1,0 +1,6 @@
+/sen.exe
+/sen
+.sen/
+.cache/
+*.test
+*.out

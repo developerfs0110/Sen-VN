@@ -1,0 +1,12 @@
+{
+  "name": "sen-vn",
+  "displayName": "Sen VN",
+  "version": "1.0.0",
+  "description": "Deterministic zero-API-key requirement ledger, snapshot undo, and anti-cheat verification referee for any AI IDE.",
+  "author": {
+    "name": "Mr Bòn Bon",
+    "url": "https://github.com/developerfs0110"
+  },
+  "homepage": "https://github.com/developerfs0110/Sen-VN",
+  "repository": "https://github.com/developerfs0110/Sen-VN"
+}

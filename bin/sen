@@ -1,0 +1,97 @@
+#!/usr/bin/env sh
+# Trình bọc khởi chạy nhanh Zero-Build cho Sen MVP trên macOS và Linux (UTF-8 không BOM, chuẩn LF).
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+
+# Bước 1: Đường chạy siêu tốc (<2ms) nếu đã có sẵn tệp nhị phân trong bộ nhớ đệm hoặc thư mục gốc.
+if [ -n "${PLUGIN_DATA:-}" ] && [ -x "$PLUGIN_DATA/bin/sen" ]; then
+    exec "$PLUGIN_DATA/bin/sen" "$@"
+fi
+if [ -x "$REPO_ROOT/.cache/bin/sen" ]; then
+    exec "$REPO_ROOT/.cache/bin/sen" "$@"
+fi
+if [ -x "$REPO_ROOT/sen" ]; then
+    exec "$REPO_ROOT/sen" "$@"
+fi
+
+if [ -n "${PLUGIN_DATA:-}" ]; then
+    CACHE_DIR="$PLUGIN_DATA/bin"
+else
+    CACHE_DIR="$REPO_ROOT/.cache/bin"
+fi
+TARGET_BIN="$CACHE_DIR/sen"
+
+# Bước 2 & 3: Chạy trong tiến trình con nối stdin từ /dev/null và đẩy log sang stderr để bảo toàn JSON hook.
+(
+    mkdir -p "$CACHE_DIR"
+    UNAME_S="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    case "$UNAME_S" in
+        darwin*) OS="darwin" ;;
+        linux*)  OS="linux" ;;
+        *)       OS="$UNAME_S" ;;
+    esac
+    UNAME_M="$(uname -m)"
+    case "$UNAME_M" in
+        x86_64|amd64)  ARCH="amd64" ;;
+        arm64|aarch64) ARCH="arm64" ;;
+        *)             ARCH="$UNAME_M" ;;
+    esac
+
+    # Tự động xác định kho GitHub từ biến môi trường, git remote origin hoặc mặc định developerfs0110/Sen-VN.
+    SLUG="${SEN_GITHUB_REPO:-}"
+    if [ -z "$SLUG" ] && command -v git >/dev/null 2>&1; then
+        ORIGIN="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || true)"
+        SLUG="$(printf '%s' "$ORIGIN" | sed -n 's#.*github\.com[:/]\([^/][^/]*/[^/.][^/.]*\)\(\.git\)\{0,1\}$#\1#p')"
+    fi
+    [ -z "$SLUG" ] && SLUG="developerfs0110/Sen-VN"
+
+    ASSET="sen-${OS}-${ARCH}"
+    BASE_URL="https://github.com/${SLUG}/releases/latest/download"
+    TMP_SUM="${CACHE_DIR}/.checksums.$$.txt"
+    TMP_BIN="${CACHE_DIR}/.sen.$$.tmp"
+    cleanup() { rm -f "$TMP_SUM" "$TMP_BIN"; }
+    trap cleanup EXIT
+
+    # Bước 2: Tải bản dựng sẵn từ GitHub Releases qua HTTPS và đối chiếu mã băm SHA-256 bắt buộc.
+    DOWNLOADED=0
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsSL --connect-timeout 10 "$BASE_URL/checksums.txt" -o "$TMP_SUM" 2>/dev/null && \
+           curl -fsSL --connect-timeout 15 "$BASE_URL/$ASSET" -o "$TMP_BIN" 2>/dev/null; then
+            WANT="$(awk -v a="$ASSET" '$2 == a || $2 == "*"a { print tolower($1); exit }' "$TMP_SUM")"
+            if [ -n "$WANT" ]; then
+                if command -v sha256sum >/dev/null 2>&1; then
+                    GOT="$(sha256sum "$TMP_BIN" | awk '{ print tolower($1) }')"
+                else
+                    GOT="$(shasum -a 256 "$TMP_BIN" | awk '{ print tolower($1) }')"
+                fi
+                if [ "$WANT" = "$GOT" ]; then
+                    chmod +x "$TMP_BIN"
+                    mv "$TMP_BIN" "$TARGET_BIN"
+                    DOWNLOADED=1
+                fi
+            fi
+        fi
+    fi
+
+    # Bước 3: Dự phòng biên dịch tại chỗ một lần duy nhất bằng Go nếu ngoại tuyến hoặc chưa phát hành Release.
+    if [ "$DOWNLOADED" -eq 0 ]; then
+        GO_BIN=""
+        if command -v go >/dev/null 2>&1; then
+            GO_BIN="$(command -v go)"
+        elif [ -x "/usr/local/go/bin/go" ]; then
+            GO_BIN="/usr/local/go/bin/go"
+        elif [ -x "/opt/homebrew/bin/go" ]; then
+            GO_BIN="/opt/homebrew/bin/go"
+        fi
+        if [ -z "$GO_BIN" ]; then
+            echo "sen: neither prebuilt GitHub Release ($BASE_URL/$ASSET) nor Go toolchain was found." >&2
+            exit 1
+        fi
+        (cd "$REPO_ROOT" && CGO_ENABLED=0 "$GO_BIN" build -trimpath -ldflags="-s -w" -o "$TARGET_BIN" ./cmd/sen)
+        chmod +x "$TARGET_BIN"
+    fi
+) < /dev/null >&2
+
+exec "$TARGET_BIN" "$@"
